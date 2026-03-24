@@ -2,7 +2,6 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createServerSupabaseClient } from "@/lib/supabase-server";
 import ReadinessCircle from "@/components/readiness-circle";
-import UserMenu from "@/components/user-menu";
 
 export default async function DashboardPage() {
   const supabase = await createServerSupabaseClient();
@@ -114,14 +113,7 @@ export default async function DashboardPage() {
           </p>
         </div>
 
-        <UserMenu
-          userId={user.id}
-          fullName={profile?.full_name || "User"}
-          email={profile?.email || user.email || ""}
-          organizationName={organization?.name || "No Organization"}
-          phone={profile?.phone || ""}
-          contactTitle={profile?.contact_title || ""}
-        />
+        
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">

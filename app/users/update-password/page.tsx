@@ -5,22 +5,35 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase";
 
-export default function LoginPage() {
+export default function UpdatePasswordPage() {
   const router = useRouter();
   const supabase = createClient();
 
-  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [loading, setLoading] = useState(false);
 
-  async function handleLogin(e: React.FormEvent<HTMLFormElement>) {
+  async function handleUpdatePassword(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setLoading(true);
+    setMessage("");
     setErrorMessage("");
 
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
+    if (password !== confirmPassword) {
+      setErrorMessage("Passwords do not match.");
+      setLoading(false);
+      return;
+    }
+
+    if (password.length < 8) {
+      setErrorMessage("Password must be at least 8 characters.");
+      setLoading(false);
+      return;
+    }
+
+    const { error } = await supabase.auth.updateUser({
       password,
     });
 
@@ -30,55 +43,58 @@ export default function LoginPage() {
       return;
     }
 
-    router.push("/");
-    router.refresh();
+    setMessage("Password updated successfully.");
+
+    setTimeout(() => {
+      router.push("/login");
+      router.refresh();
+    }, 1200);
   }
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-100 px-4">
       <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
         <div className="mb-6">
-          <h1 className="text-3xl font-bold text-slate-900">Login</h1>
+          <Link
+            href="/login"
+            className="text-sm text-slate-600 hover:text-slate-900"
+          >
+            ← Back to Login
+          </Link>
+
+          <h1 className="mt-4 text-3xl font-bold text-slate-900">
+            Set New Password
+          </h1>
           <p className="mt-2 text-sm text-slate-600">
-            Sign in to access your organization workspace
+            Enter your new password below
           </p>
         </div>
 
-        <form onSubmit={handleLogin} className="space-y-5">
+        <form onSubmit={handleUpdatePassword} className="space-y-5">
           <div>
             <label className="mb-2 block text-sm font-medium text-slate-900">
-              Email
+              New Password
             </label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="you@example.com"
-              required
-            />
-          </div>
-
-          <div>
-            <div className="mb-2 flex items-center justify-between">
-              <label className="block text-sm font-medium text-slate-900">
-                Password
-              </label>
-
-              <Link
-                href="/users/reset-password"
-                className="text-sm text-blue-600 hover:text-blue-700 hover:underline"
-              >
-                Forgot password?
-              </Link>
-            </div>
-
             <input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="Enter password"
+              placeholder="Enter new password"
+              required
+            />
+          </div>
+
+          <div>
+            <label className="mb-2 block text-sm font-medium text-slate-900">
+              Confirm New Password
+            </label>
+            <input
+              type="password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="Confirm new password"
               required
             />
           </div>
@@ -89,12 +105,18 @@ export default function LoginPage() {
             </div>
           ) : null}
 
+          {message ? (
+            <div className="rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700">
+              {message}
+            </div>
+          ) : null}
+
           <button
             type="submit"
             disabled={loading}
             className="inline-flex w-full items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700 disabled:opacity-60"
           >
-            {loading ? "Signing in..." : "Sign In"}
+            {loading ? "Updating..." : "Update Password"}
           </button>
         </form>
       </div>

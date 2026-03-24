@@ -1,160 +1,115 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { createClient } from "@/lib/supabase";
+import Link from "next/link";
+import { useEffect, useRef, useState } from "react";
 import LogoutButton from "@/components/logout-button";
 
-type Props = {
-  userId: string;
+type UserMenuProps = {
   fullName: string;
-  email: string;
   organizationName: string;
-  phone: string | null;
-  contactTitle: string | null;
 };
 
-export default function UserMenu({
-  userId,
-  fullName,
-  email,
-  organizationName,
-  phone,
-  contactTitle,
-}: Props) {
-  const supabase = createClient();
-  const [open, setOpen] = useState(false);
-  const [phoneValue, setPhoneValue] = useState(phone || "");
-  const [contactTitleValue, setContactTitleValue] = useState(contactTitle || "");
-  const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState("");
+function getInitials(name: string) {
+  if (!name) return "U";
 
-  const initials = useMemo(() => {
-    const parts = fullName?.trim().split(" ").filter(Boolean) || [];
-    if (parts.length === 0) return "U";
-    if (parts.length === 1) return parts[0][0].toUpperCase();
-    return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
-  }, [fullName]);
+  const parts = name.trim().split(/\s+/);
 
-  async function handleSave() {
-    setSaving(true);
-    setMessage("");
-
-    const { error } = await supabase
-      .from("profiles")
-      .update({
-        phone: phoneValue,
-        contact_title: contactTitleValue,
-      })
-      .eq("id", userId);
-
-    if (error) {
-      setMessage(`Save failed: ${error.message}`);
-      setSaving(false);
-      return;
-    }
-
-    setMessage("Profile updated.");
-    setSaving(false);
+  if (parts.length === 1) {
+    return parts[0].slice(0, 2).toUpperCase();
   }
 
+  return `${parts[0][0] || ""}${parts[1][0] || ""}`.toUpperCase();
+}
+
+export default function UserMenu({
+  fullName,
+  organizationName,
+}: UserMenuProps) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (
+        containerRef.current &&
+        !containerRef.current.contains(event.target as Node)
+      ) {
+        setOpen(false);
+      }
+    }
+
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    }
+
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleEscape);
+
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, []);
+
   return (
-    <div className="relative">
+    <div className="relative" ref={containerRef}>
       <button
+        type="button"
         onClick={() => setOpen((prev) => !prev)}
-        className="flex items-center gap-3 bg-slate-50 border border-slate-200 rounded-full px-4 py-2 hover:bg-slate-100 transition"
+        className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm hover:bg-slate-50 transition"
       >
-        <div className="w-10 h-10 rounded-full bg-slate-200 flex items-center justify-center font-semibold text-slate-700">
-          {initials}
+        <div className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-200 text-xs font-semibold text-slate-700">
+          {getInitials(fullName)}
         </div>
+
         <div className="text-left">
-          <div className="text-slate-800 font-medium leading-tight">
-            {fullName}
-          </div>
-          <div className="text-xs text-slate-500 leading-tight">
-            {organizationName}
-          </div>
+          <div className="text-sm font-medium text-slate-900">{fullName}</div>
+          <div className="text-xs text-slate-500">{organizationName}</div>
         </div>
+
+        <svg
+          className={`h-4 w-4 text-slate-500 transition-transform ${
+            open ? "rotate-180" : ""
+          }`}
+          viewBox="0 0 20 20"
+          fill="currentColor"
+          aria-hidden="true"
+        >
+          <path
+            fillRule="evenodd"
+            d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.51a.75.75 0 01-1.08 0l-4.25-4.51a.75.75 0 01.02-1.06z"
+            clipRule="evenodd"
+          />
+        </svg>
       </button>
 
       {open ? (
-        <div className="absolute right-0 mt-3 w-[360px] bg-white border border-slate-200 rounded-2xl shadow-xl p-5 z-50">
-          <h3 className="text-lg font-semibold text-slate-800 mb-4">
-            Profile
-          </h3>
+        <div className="absolute right-0 mt-2 w-56 rounded-xl border border-slate-200 bg-white shadow-lg z-50 overflow-hidden">
+          <div className="border-b border-slate-100 px-4 py-3">
+            <div className="text-sm font-medium text-slate-900">{fullName}</div>
+            <div className="text-xs text-slate-500">{organizationName}</div>
+          </div>
 
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">
-                User Name
-              </label>
-              <input
-                value={fullName}
-                readOnly
-                className="w-full rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-slate-700"
-              />
-            </div>
+          <div className="py-2">
+            <Link
+              href="/users/profile"
+              className="block px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
+              onClick={() => setOpen(false)}
+            >
+              My Profile
+            </Link>
 
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">
-                Organization
-              </label>
-              <input
-                value={organizationName}
-                readOnly
-                className="w-full rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-slate-700"
-              />
-            </div>
+            <Link
+              href="/users/reset-password"
+              className="block px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
+              onClick={() => setOpen(false)}
+            >
+              Reset Password
+            </Link>
 
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">
-                Email
-              </label>
-              <input
-                value={email}
-                readOnly
-                className="w-full rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-slate-700"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">
-                Phone
-              </label>
-              <input
-                value={phoneValue}
-                onChange={(e) => setPhoneValue(e.target.value)}
-                placeholder="Enter phone number"
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-800"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">
-                Contact Title
-              </label>
-              <input
-                value={contactTitleValue}
-                onChange={(e) => setContactTitleValue(e.target.value)}
-                placeholder="Example: ISO, Export Control Officer"
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-800"
-              />
-            </div>
-
-            {message ? (
-              <p className="text-sm text-slate-600">{message}</p>
-            ) : null}
-
-            <div className="flex items-center justify-between pt-2">
-              <button
-                onClick={handleSave}
-                disabled={saving}
-                className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50"
-              >
-                {saving ? "Saving..." : "Save Contact Info"}
-              </button>
-
-              <LogoutButton />
-            </div>
+            <LogoutButton className="block w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50" />
           </div>
         </div>
       ) : null}
