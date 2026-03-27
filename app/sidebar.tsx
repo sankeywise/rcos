@@ -1,54 +1,47 @@
 import Link from "next/link";
 
-export default function Sidebar() {
+type SidebarProps = {
+  pathname?: string;
+};
+
+const navItems = [
+  { href: "/", label: "Dashboard" },
+  { href: "/projects", label: "Projects" },
+  { href: "/personnel", label: "Personnel" },
+  { href: "/cmmc-compliance", label: "CMMC Compliance" },
+  { href: "/compliance-team", label: "Compliance Team" },
+  { href: "/users", label: "Manage Users" },
+  { href: "/admin", label: "Admin" },
+];
+
+export default function Sidebar({ pathname = "" }: SidebarProps) {
   return (
-    <aside className="w-64 shrink-0 bg-slate-800 text-white flex flex-col min-h-screen border-r border-slate-700 relative z-30">
-      <div className="p-6 text-2xl font-bold border-b border-slate-700">
-        RCOS
+    <aside className="w-64 min-h-screen bg-slate-950 text-white border-r border-slate-800">
+      <div className="px-6 py-6 border-b border-slate-800">
+        <div className="text-3xl font-bold tracking-tight">RCOS</div>
       </div>
 
-      <nav className="flex-1 p-4 space-y-2">
-        <Link
-          href="/"
-          className="block w-full px-3 py-2 rounded-lg text-slate-200 hover:bg-slate-700 hover:text-white transition"
-        >
-          Dashboard
-        </Link>
+      <nav className="px-4 py-6 space-y-1">
+        {navItems.map((item) => {
+          const isActive =
+            item.href === "/"
+              ? pathname === "/"
+              : pathname.startsWith(item.href);
 
-        <Link
-          href="/projects"
-          className="block w-full px-3 py-2 rounded-lg text-slate-200 hover:bg-slate-700 hover:text-white transition"
-        >
-          Projects
-        </Link>
-
-        <Link
-          href="/personnel"
-          className="block w-full px-3 py-2 rounded-lg text-slate-200 hover:bg-slate-700 hover:text-white transition"
-        >
-          Personnel
-        </Link>
-
-        <Link
-          href="/artifacts"
-          className="block w-full px-3 py-2 rounded-lg text-slate-200 hover:bg-slate-700 hover:text-white transition"
-        >
-          Documents
-        </Link>
-
-        <Link
-          href="/users"
-          className="block w-full px-3 py-2 rounded-lg text-slate-200 hover:bg-slate-700 hover:text-white transition"
-        >
-          Manage Users
-        </Link>
-
-        <Link
-          href="/admin"
-          className="block w-full px-3 py-2 rounded-lg text-slate-200 hover:bg-slate-700 hover:text-white transition"
-        >
-          Admin
-        </Link>
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              className={`block rounded-xl px-4 py-3 text-sm font-medium transition ${
+                isActive
+                  ? "bg-slate-800 text-white"
+                  : "text-slate-300 hover:bg-slate-900 hover:text-white"
+              }`}
+            >
+              {item.label}
+            </Link>
+          );
+        })}
       </nav>
     </aside>
   );

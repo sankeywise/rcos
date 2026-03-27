@@ -2,114 +2,76 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createServerSupabaseClient } from "@/lib/supabase-server";
 
+type ProjectDetailPageProps = {
+  params: Promise<{
+    id: string;
+  }>;
+};
+
 function formatDate(value?: string | null) {
   if (!value) return "—";
 
   const date = new Date(value);
-
   if (Number.isNaN(date.getTime())) return value;
 
   return date.toLocaleDateString();
 }
 
-function formatClassificationType(value?: string | null) {
-  if (!value) return "Not Set";
+function getBadgeClass(status?: string | boolean | null) {
+  if (typeof status === "boolean") {
+    return status
+      ? "bg-green-100 text-green-700"
+      : "bg-yellow-100 text-yellow-700";
+  }
 
-  const normalized = value.toLowerCase();
+  const normalized = String(status || "").toLowerCase();
 
-  if (normalized === "cui") return "CUI";
-  if (normalized === "itar_cui") return "ITAR Export Controlled + CUI";
-  if (normalized === "ear_cui") return "EAR Export Controlled + CUI";
-  if (normalized === "itar") return "ITAR Export Controlled";
-  if (normalized === "ear") return "EAR Export Controlled";
+  if (
+    normalized === "complete" ||
+    normalized === "completed" ||
+    normalized === "approved" ||
+    normalized === "verified" ||
+    normalized === "active" ||
+    normalized === "cleared"
+  ) {
+    return "bg-green-100 text-green-700";
+  }
 
-  return value
-    .replaceAll("_", " ")
-    .replace(/\b\w/g, (char) => char.toUpperCase());
+  if (
+    normalized === "in progress" ||
+    normalized === "pending" ||
+    normalized === "pending verification" ||
+    normalized === "review required"
+  ) {
+    return "bg-blue-100 text-blue-700";
+  }
+
+  if (
+    normalized === "expired" ||
+    normalized === "overdue" ||
+    normalized === "non-compliant" ||
+    normalized === "restricted"
+  ) {
+    return "bg-red-100 text-red-700";
+  }
+
+  return "bg-yellow-100 text-yellow-700";
 }
 
-function statusBadge(status?: string | null) {
-  const normalized = (status || "").toLowerCase();
-
-  if (normalized === "active") {
-    return (
-      <span className="inline-flex items-center rounded-full bg-green-100 px-3 py-1 text-sm font-medium text-green-700">
-        Active
-      </span>
-    );
-  }
-
-  if (normalized === "pending") {
-    return (
-      <span className="inline-flex items-center rounded-full bg-yellow-100 px-3 py-1 text-sm font-medium text-yellow-700">
-        Pending
-      </span>
-    );
-  }
-
-  if (normalized === "closed") {
-    return (
-      <span className="inline-flex items-center rounded-full bg-slate-200 px-3 py-1 text-sm font-medium text-slate-700">
-        Closed
-      </span>
-    );
-  }
-
-  return (
-    <span className="inline-flex items-center rounded-full bg-slate-200 px-3 py-1 text-sm font-medium text-slate-700">
-      {status || "Unknown"}
-    </span>
-  );
+function displayName(person: any) {
+  return person.full_name || person.name || "Unnamed Person";
 }
 
-function artifactStatusBadge(status?: string | null) {
-  const normalized = (status || "").toLowerCase();
-
-  if (["approved", "signed", "complete", "completed"].includes(normalized)) {
-    return (
-      <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-1 text-xs font-medium text-green-700">
-        {status || "Approved"}
-      </span>
-    );
-  }
-
-  if (normalized === "pending") {
-    return (
-      <span className="inline-flex items-center rounded-full bg-yellow-100 px-2 py-1 text-xs font-medium text-yellow-700">
-        Pending
-      </span>
-    );
-  }
-
-  return (
-    <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">
-      {status || "Unknown"}
-    </span>
-  );
-}
-
-function trainingBadge(trainingComplete?: boolean | null) {
-  if (trainingComplete) {
-    return (
-      <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-1 text-xs font-medium text-green-700">
-        Complete
-      </span>
-    );
-  }
-
-  return (
-    <span className="inline-flex items-center rounded-full bg-yellow-100 px-2 py-1 text-xs font-medium text-yellow-700">
-      Required
-    </span>
-  );
+function trainingLabel(trainingComplete?: boolean | null) {
+  return trainingComplete ? "Complete" : "Required";
 }
 
 export default async function ProjectDetailPage({
   params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
+}: ProjectDetailPageProps) {
   const resolvedParams = await params;
+  const projectId = Number(resolvedParams.id);
+
   const supabase = await createServerSupabaseClient();
 
   const {
@@ -120,362 +82,409 @@ export default async function ProjectDetailPage({
     redirect("/login");
   }
 
-  const { data: membership, error: membershipError } = await supabase
+  const { data: membership } = await supabase
     .from("organization_memberships")
     .select("organization_id")
     .eq("user_id", user.id)
     .eq("is_active", true)
     .single();
 
-  if (membershipError) {
-    return (
-      <div className="p-6">
-        <h1 className="text-2xl font-bold text-red-600">Membership Error</h1>
-        <pre className="mt-4 whitespace-pre-wrap text-sm text-red-600">
-          {JSON.stringify(membershipError, null, 2)}
-        </pre>
-      </div>
-    );
-  }
-
   if (!membership) {
-    redirect("/");
-  }
-
-  const orgId = membership.organization_id;
-  const projectId = Number(resolvedParams?.id);
-
-  if (Number.isNaN(projectId)) {
-    return (
-      <div className="p-6">
-        <h1 className="text-2xl font-bold text-red-600">Invalid Project ID</h1>
-        <p className="mt-2 text-slate-700">
-          URL param was: {String(resolvedParams?.id || "")}
-        </p>
-      </div>
-    );
+    return <div className="p-6 text-red-600">No organization access found.</div>;
   }
 
   const { data: project, error: projectError } = await supabase
     .from("projects")
     .select(`
       id,
-      name,
+      organization_id,
+      project_name,
       sponsor,
       status,
-      created_at,
-      classification,
-      classification_type,
       environment,
+      classification,
+      export_control_type,
       pop_start_date,
-      pop_end_date,
-      organization_id
+      pop_end_date
     `)
     .eq("id", projectId)
-    .eq("organization_id", orgId)
+    .eq("organization_id", membership.organization_id)
     .single();
 
-  if (projectError) {
-    return (
-      <div className="p-6">
-        <h1 className="text-2xl font-bold text-red-600">Project Query Error</h1>
-        <pre className="mt-4 whitespace-pre-wrap text-sm text-red-600">
-          {JSON.stringify(projectError, null, 2)}
-        </pre>
-      </div>
-    );
+  if (projectError || !project) {
+    return <div className="p-6 text-red-600">Project not found.</div>;
   }
 
-  if (!project) {
-    return (
-      <div className="p-6">
-        <h1 className="text-2xl font-bold text-red-600">Project Not Found</h1>
-      </div>
-    );
-  }
+  const { data: personnel } = await supabase
+    .from("personnel")
+    .select(`
+      id,
+      name,
+      full_name,
+      role,
+      citizenship,
+      training_complete,
+      citizenship_status,
+      additional_screening_status,
+      additional_screening_date,
+      rps_screening_status,
+      rps_screening_date,
+      personnel_status,
+      secure_machine_name,
+      secure_machine_asset_tag,
+      secure_machine_serial,
+      secure_machine_location,
+      secure_machine_verified_on,
+      secure_machine_status
+    `)
+    .eq("project_id", projectId)
+    .order("created_at", { ascending: false });
 
-  const { data: artifacts, error: artifactsError } = await supabase
+  const { data: documents } = await supabase
     .from("artifacts")
     .select(`
       id,
       title,
       artifact_type,
       status,
-      file_path,
-      uploaded_by_user_id,
-      created_at
+      created_at,
+      file_path
     `)
     .eq("project_id", projectId)
-    .eq("organization_id", orgId)
     .order("created_at", { ascending: false });
 
-  if (artifactsError) {
-    return (
-      <div className="p-6">
-        <h1 className="text-2xl font-bold text-red-600">Artifacts Query Error</h1>
-        <pre className="mt-4 whitespace-pre-wrap text-sm text-red-600">
-          {JSON.stringify(artifactsError, null, 2)}
-        </pre>
-      </div>
-    );
-  }
-
-  const { data: personnel, error: personnelError } = await supabase
-    .from("personnel")
-    .select(`
-      id,
-      name,
-      role,
-      citizenship,
-      citizenship_status,
-      training_complete
-    `)
-    .eq("project_id", projectId)
-    .eq("organization_id", orgId)
-    .order("name", { ascending: true });
-
-  if (personnelError) {
-    return (
-      <div className="p-6">
-        <h1 className="text-2xl font-bold text-red-600">Personnel Query Error</h1>
-        <pre className="mt-4 whitespace-pre-wrap text-sm text-red-600">
-          {JSON.stringify(personnelError, null, 2)}
-        </pre>
-      </div>
-    );
-  }
-
-  const totalArtifacts = artifacts?.length || 0;
-  const completedArtifacts =
-    artifacts?.filter((artifact) =>
-      ["approved", "signed", "complete", "completed"].includes(
-        (artifact.status || "").toLowerCase()
-      )
+  const incompletePersonnelMachineCount =
+    personnel?.filter(
+      (person) =>
+        !person.secure_machine_name ||
+        String(person.secure_machine_status || "").toLowerCase() !== "verified"
     ).length || 0;
 
-  const readiness =
-    totalArtifacts > 0
-      ? Math.round((completedArtifacts / totalArtifacts) * 100)
-      : 0;
+  const incompleteTrainingCount =
+    personnel?.filter((person) => !person.training_complete).length || 0;
+
+  const incompleteRpsCount =
+    personnel?.filter(
+      (person) =>
+        !person.rps_screening_status ||
+        !["cleared", "verified", "complete", "completed"].includes(
+          String(person.rps_screening_status || "").toLowerCase()
+        )
+    ).length || 0;
+
+  const incompleteCitizenshipCount =
+    personnel?.filter(
+      (person) =>
+        !person.citizenship_status ||
+        !["verified", "cleared", "approved"].includes(
+          String(person.citizenship_status || "").toLowerCase()
+        )
+    ).length || 0;
+
+  const incompleteDocumentCount =
+    documents?.filter(
+      (doc) =>
+        !["complete", "completed", "approved", "signed"].includes(
+          String(doc.status || "").toLowerCase()
+        )
+    ).length || 0;
+
+  const incompleteItems = [
+    ...(incompletePersonnelMachineCount > 0
+      ? [
+          `${incompletePersonnelMachineCount} personnel record(s) missing verified secure machine assignment`,
+        ]
+      : []),
+    ...(incompleteTrainingCount > 0
+      ? [`${incompleteTrainingCount} personnel record(s) missing completed training`]
+      : []),
+    ...(incompleteRpsCount > 0
+      ? [`${incompleteRpsCount} personnel record(s) missing completed RPS review`]
+      : []),
+    ...(incompleteCitizenshipCount > 0
+      ? [`${incompleteCitizenshipCount} personnel record(s) missing citizenship verification`]
+      : []),
+    ...(incompleteDocumentCount > 0
+      ? [`${incompleteDocumentCount} project document(s) still incomplete or pending`]
+      : []),
+  ];
 
   return (
     <div className="space-y-6">
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <Link
+            href="/projects"
+            className="text-sm font-medium text-blue-600 hover:text-blue-700"
+          >
+            ← Back to Projects
+          </Link>
+          <h1 className="mt-2 text-3xl font-bold text-slate-900">
+            {project.project_name}
+          </h1>
+          <p className="mt-1 text-slate-600">
+            Sponsor: {project.sponsor || "—"} • Status: {project.status || "—"}
+          </p>
+        </div>
+
         <Link
-          href="/projects"
-          className="text-sm text-slate-500 hover:text-slate-700"
+          href={`/projects/${project.id}/edit`}
+          className="inline-flex items-center rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700 transition"
         >
-          ← Back to Projects
+          Edit Project
         </Link>
+      </div>
 
-        <div className="mt-3 flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-bold text-slate-900">
-              {project.name}
-            </h1>
-            <p className="text-slate-500 mt-1">
-              {project.sponsor || "No Sponsor"} ·{" "}
-              {project.classification || "No Classification"}
-            </p>
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+          <div className="text-sm text-slate-500">Classification</div>
+          <div className="mt-2 text-lg font-semibold text-slate-900">
+            {project.classification || "—"}
           </div>
-
-          <div>{statusBadge(project.status)}</div>
         </div>
 
-        <div className="mt-6 flex flex-wrap gap-3">
-          <Link
-            href={`/projects/${project.id}/edit`}
-            className="inline-flex items-center rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 transition"
-          >
-            Edit Project Details
-          </Link>
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+          <div className="text-sm text-slate-500">Environment</div>
+          <div className="mt-2 text-lg font-semibold text-slate-900">
+            {project.environment || "—"}
+          </div>
+        </div>
 
-          <Link
-            href={`/artifacts/new?projectId=${project.id}`}
-            className="inline-flex items-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition"
-          >
-            Add Document
-          </Link>
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+          <div className="text-sm text-slate-500">Export Control Type</div>
+          <div className="mt-2 text-lg font-semibold text-slate-900">
+            {project.export_control_type || "—"}
+          </div>
+        </div>
 
-          <Link
-            href={`/personnel/new?projectId=${project.id}`}
-            className="inline-flex items-center rounded-lg bg-slate-800 px-4 py-2 text-sm font-medium text-white hover:bg-slate-900 transition"
-          >
-            Add Personnel
-          </Link>
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+          <div className="text-sm text-slate-500">Incomplete Items</div>
+          <div className="mt-2 text-3xl font-bold text-slate-900">
+            {incompleteItems.length}
+          </div>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      {incompleteItems.length > 0 ? (
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
-          <div className="text-sm text-slate-500">Documents</div>
-          <div className="mt-2 text-3xl font-bold text-slate-900">
-            {totalArtifacts}
+          <h2 className="text-xl font-semibold text-slate-900">Incomplete Items</h2>
+          <div className="mt-4 space-y-2">
+            {incompleteItems.map((item, index) => (
+              <div
+                key={index}
+                className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"
+              >
+                {item}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+          <h2 className="text-xl font-semibold text-slate-900">Project Details</h2>
+
+          <div className="mt-4 space-y-4 text-sm">
+            <div className="rounded-xl border border-slate-200 px-4 py-3">
+              <div className="text-xs uppercase tracking-wide text-slate-500">
+                PoP Start Date
+              </div>
+              <div className="mt-1 font-medium text-slate-900">
+                {formatDate(project.pop_start_date)}
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 px-4 py-3">
+              <div className="text-xs uppercase tracking-wide text-slate-500">
+                PoP End Date
+              </div>
+              <div className="mt-1 font-medium text-slate-900">
+                {formatDate(project.pop_end_date)}
+              </div>
+            </div>
           </div>
         </div>
 
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
-          <div className="text-sm text-slate-500">Completed</div>
-          <div className="mt-2 text-3xl font-bold text-green-700">
-            {completedArtifacts}
+          <div className="flex items-center justify-between gap-4">
+            <h2 className="text-xl font-semibold text-slate-900">
+              Project Documents
+            </h2>
+            <Link
+              href={`/artifacts/new?project=${project.id}`}
+              className="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 transition"
+            >
+              Add Document
+            </Link>
           </div>
-        </div>
 
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
-          <div className="text-sm text-slate-500">Readiness</div>
-          <div className="mt-2 text-3xl font-bold text-slate-900">
-            {readiness}%
-          </div>
+          {!documents || documents.length === 0 ? (
+            <div className="mt-4 text-sm text-slate-500">
+              No project documents uploaded yet.
+            </div>
+          ) : (
+            <div className="mt-4 space-y-3">
+              {documents.map((doc) => (
+                <div
+                  key={doc.id}
+                  className="rounded-xl border border-slate-200 px-4 py-3"
+                >
+                  <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <div className="font-medium text-slate-900">
+                        {doc.title || "Untitled"}
+                      </div>
+                      <div className="mt-1 text-xs text-slate-500">
+                        {doc.artifact_type || "Document"} • {formatDate(doc.created_at)}
+                      </div>
+                    </div>
+
+                    <span
+                      className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${getBadgeClass(
+                        doc.status
+                      )}`}
+                    >
+                      {doc.status || "Pending"}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
-        <h2 className="text-lg font-semibold text-slate-800 mb-4">
-          Project Overview
-        </h2>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-12 gap-y-4 text-sm">
-          <div>
-            <div className="text-slate-500 mb-1">Sponsor</div>
-            <div className="text-slate-800 font-medium">
-              {project.sponsor || "—"}
-            </div>
-          </div>
-
-          <div>
-            <div className="text-slate-500 mb-1">Environment</div>
-            <div className="text-slate-800 font-medium">
-              {project.environment || "—"}
-            </div>
-          </div>
-
-          <div>
-            <div className="text-slate-500 mb-1">Classification</div>
-            <div className="text-slate-800 font-medium">
-              {project.classification || "—"}
-            </div>
-          </div>
-
-          <div>
-            <div className="text-slate-500 mb-1">
-              Export Control / Classification Type
-            </div>
-            <div className="text-slate-800 font-medium">
-              {formatClassificationType(project.classification_type)}
-            </div>
-          </div>
-
-          <div>
-            <div className="text-slate-500 mb-1">PoP Start</div>
-            <div className="text-slate-800 font-medium">
-              {formatDate(project.pop_start_date)}
-            </div>
-          </div>
-
-          <div>
-            <div className="text-slate-500 mb-1">PoP Anticipated End</div>
-            <div className="text-slate-800 font-medium">
-              {formatDate(project.pop_end_date)}
-            </div>
-          </div>
-
-          <div>
-            <div className="text-slate-500 mb-1">Created</div>
-            <div className="text-slate-800 font-medium">
-              {formatDate(project.created_at)}
-            </div>
-          </div>
+        <div className="flex items-center justify-between gap-4">
+          <h2 className="text-xl font-semibold text-slate-900">Project Personnel</h2>
+          <Link
+            href="/personnel"
+            className="text-sm font-medium text-blue-600 hover:text-blue-700"
+          >
+            Manage Personnel
+          </Link>
         </div>
-      </div>
 
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
-        <h2 className="text-lg font-semibold text-slate-800 mb-4">
-          Documents
-        </h2>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm text-left border-collapse">
-            <thead className="text-slate-500 border-b">
-              <tr>
-                <th className="py-3 pr-4">Title</th>
-                <th className="py-3 pr-4">Type</th>
-                <th className="py-3 pr-4">Status</th>
-                <th className="py-3 pr-4">File</th>
-              </tr>
-            </thead>
-            <tbody>
-              {!artifacts || artifacts.length === 0 ? (
-                <tr>
-                  <td colSpan={4} className="py-4 text-slate-500">
-                    No documents found.
-                  </td>
+        {!personnel || personnel.length === 0 ? (
+          <div className="mt-4 text-sm text-slate-500">
+            No personnel assigned to this project yet.
+          </div>
+        ) : (
+          <div className="mt-4 overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 text-slate-500">
+                  <th className="py-3 pr-4 text-left font-medium">Name</th>
+                  <th className="py-3 pr-4 text-left font-medium">Role</th>
+                  <th className="py-3 pr-4 text-left font-medium">Citizenship</th>
+                  <th className="py-3 pr-4 text-left font-medium">Training</th>
+                  <th className="py-3 pr-4 text-left font-medium">RPS</th>
+                  <th className="py-3 pr-4 text-left font-medium">Additional Screening</th>
+                  <th className="py-3 pr-4 text-left font-medium">Personnel Status</th>
+                  <th className="py-3 pr-4 text-left font-medium">Secure Machine</th>
+                  <th className="py-3 pr-4 text-left font-medium">Machine Status</th>
                 </tr>
-              ) : (
-                artifacts.map((artifact) => (
-                  <tr key={artifact.id} className="border-b last:border-b-0">
-                    <td className="py-4 pr-4 text-slate-800">
-                      {artifact.title}
+              </thead>
+              <tbody>
+                {personnel.map((person) => (
+                  <tr key={person.id} className="border-b border-slate-100 align-top">
+                    <td className="py-4 pr-4 font-medium text-slate-900">
+                      {displayName(person)}
                     </td>
+
+                    <td className="py-4 pr-4 text-slate-700">{person.role || "—"}</td>
+
                     <td className="py-4 pr-4 text-slate-700">
-                      {artifact.artifact_type || "—"}
+                      <div>{person.citizenship || "—"}</div>
+                      <div className="mt-1">
+                        <span
+                          className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${getBadgeClass(
+                            person.citizenship_status
+                          )}`}
+                        >
+                          {person.citizenship_status || "Not Reviewed"}
+                        </span>
+                      </div>
                     </td>
+
                     <td className="py-4 pr-4">
-                      {artifactStatusBadge(artifact.status)}
+                      <span
+                        className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${getBadgeClass(
+                          trainingLabel(person.training_complete)
+                        )}`}
+                      >
+                        {trainingLabel(person.training_complete)}
+                      </span>
                     </td>
+
+                    <td className="py-4 pr-4">
+                      <div>
+                        <span
+                          className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${getBadgeClass(
+                            person.rps_screening_status
+                          )}`}
+                        >
+                          {person.rps_screening_status || "Not Started"}
+                        </span>
+                      </div>
+                      <div className="mt-1 text-xs text-slate-500">
+                        {formatDate(person.rps_screening_date)}
+                      </div>
+                    </td>
+
+                    <td className="py-4 pr-4">
+                      <div>
+                        <span
+                          className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${getBadgeClass(
+                            person.additional_screening_status
+                          )}`}
+                        >
+                          {person.additional_screening_status || "—"}
+                        </span>
+                      </div>
+                      <div className="mt-1 text-xs text-slate-500">
+                        {formatDate(person.additional_screening_date)}
+                      </div>
+                    </td>
+
+                    <td className="py-4 pr-4">
+                      <span
+                        className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${getBadgeClass(
+                          person.personnel_status
+                        )}`}
+                      >
+                        {person.personnel_status || "—"}
+                      </span>
+                    </td>
+
                     <td className="py-4 pr-4 text-slate-700">
-                      {artifact.file_path ? "File Uploaded" : "No file"}
+                      <div>{person.secure_machine_name || "Not assigned"}</div>
+                      <div className="mt-1 text-xs text-slate-500">
+                        {person.secure_machine_asset_tag || "—"}
+                      </div>
+                    </td>
+
+                    <td className="py-4 pr-4">
+                      <div>
+                        <span
+                          className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${getBadgeClass(
+                            person.secure_machine_status
+                          )}`}
+                        >
+                          {person.secure_machine_status || "Unassigned"}
+                        </span>
+                      </div>
+                      <div className="mt-1 text-xs text-slate-500">
+                        {formatDate(person.secure_machine_verified_on)}
+                      </div>
                     </td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
-        <h2 className="text-lg font-semibold text-slate-800 mb-4">
-          Personnel
-        </h2>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm text-left border-collapse">
-            <thead className="text-slate-500 border-b">
-              <tr>
-                <th className="py-3 pr-4">Name</th>
-                <th className="py-3 pr-4">Role</th>
-                <th className="py-3 pr-4">Citizenship</th>
-                <th className="py-3 pr-4">Training</th>
-              </tr>
-            </thead>
-            <tbody>
-              {!personnel || personnel.length === 0 ? (
-                <tr>
-                  <td colSpan={4} className="py-4 text-slate-500">
-                    No personnel assigned.
-                  </td>
-                </tr>
-              ) : (
-                personnel.map((person: any) => (
-                  <tr key={person.id} className="border-b last:border-b-0">
-                    <td className="py-4 pr-4 text-slate-800 font-medium">
-                      {person.name}
-                    </td>
-                    <td className="py-4 pr-4 text-slate-700">
-                      {person.role}
-                    </td>
-                    <td className="py-4 pr-4 text-slate-700">
-                      {person.citizenship_status || person.citizenship || "—"}
-                    </td>
-                    <td className="py-4 pr-4">
-                      {trainingBadge(person.training_complete)}
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );
