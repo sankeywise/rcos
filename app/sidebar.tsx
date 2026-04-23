@@ -5,7 +5,7 @@ type SidebarProps = {
 };
 
 const navItems = [
-  { href: "/", label: "Dashboard" },
+  { href: "/", label: "Action Center" },
   { href: "/projects", label: "Projects" },
   { href: "/personnel", label: "Personnel" },
   { href: "/cmmc-compliance", label: "CMMC Compliance" },

@@ -83,6 +83,11 @@ type CriticalAction = {
   severity: "Critical" | "High" | "Medium";
 };
 
+type RiskItem = {
+  label: string;
+  risk: "High Risk" | "Medium Risk";
+};
+
 function normalizeStatus(value?: string | null) {
   return String(value || "").toLowerCase();
 }
@@ -203,9 +208,7 @@ function getProjectReadiness(
 
 function getEvidenceStatus(doc: ArtifactRow) {
   if (!doc.status) return "Missing";
-
   if (isCompleteStatus(doc.status)) return "Complete";
-
   return "Partial";
 }
 
@@ -521,12 +524,12 @@ export default async function DashboardPage() {
     })),
   ].slice(0, 5);
 
-  const topRisks = [
+  const topRisks: RiskItem[] = [
     ...(personnelSecureMachineIncomplete.length > 0
       ? [
           {
             label: `${personnelSecureMachineIncomplete.length} unverified secure machine assignment(s)`,
-            risk: "High Risk",
+            risk: "High Risk" as const,
           },
         ]
       : []),
@@ -534,7 +537,7 @@ export default async function DashboardPage() {
       ? [
           {
             label: `${personnelTrainingIncomplete.length} personnel training item(s) incomplete`,
-            risk: "High Risk",
+            risk: "High Risk" as const,
           },
         ]
       : []),
@@ -542,7 +545,7 @@ export default async function DashboardPage() {
       ? [
           {
             label: `${personnelRpsIncomplete.length} personnel screening item(s) incomplete`,
-            risk: "High Risk",
+            risk: "High Risk" as const,
           },
         ]
       : []),
@@ -550,7 +553,7 @@ export default async function DashboardPage() {
       ? [
           {
             label: `${pendingProjectDocs.length} evidence/document item(s) not audit-ready`,
-            risk: "Medium Risk",
+            risk: "Medium Risk" as const,
           },
         ]
       : []),
@@ -558,7 +561,7 @@ export default async function DashboardPage() {
       ? [
           {
             label: `${incompleteControls.length} CMMC control area(s) still incomplete`,
-            risk: "Medium Risk",
+            risk: "Medium Risk" as const,
           },
         ]
       : []),
@@ -566,7 +569,7 @@ export default async function DashboardPage() {
 
   const uniqueIncompleteItems = [
     ...(pendingProjectDocs.length > 0
-      ? [`${pendingProjectDocs.length} project document(s) still incomplete or pending`] 
+      ? [`${pendingProjectDocs.length} project document(s) still incomplete or pending`]
       : []),
     ...(personnelTrainingIncomplete.length > 0
       ? [`${personnelTrainingIncomplete.length} personnel record(s) missing completed training`]
@@ -591,9 +594,9 @@ export default async function DashboardPage() {
   return (
     <div className="space-y-6">
       <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h1 className="text-3xl font-bold text-slate-900">Dashboard</h1>
+        <h1 className="text-3xl font-bold text-slate-900">Action Center</h1>
         <p className="mt-1 text-slate-600">
-          Action Center for compliance readiness, risk, evidence gaps, and required next steps.
+          Immediate view of organizational readiness, critical actions, top risks, and evidence gaps.
         </p>
       </div>
 
@@ -626,7 +629,7 @@ export default async function DashboardPage() {
 
                   <Link
                     href={item.href}
-                    className="shrink-0 rounded-lg bg-red-600 px-3 py-2 text-xs font-medium text-white hover:bg-red-700"
+                    className="shrink-0 rounded-lg bg-red-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-red-700"
                   >
                     {item.action}
                   </Link>
@@ -649,7 +652,7 @@ export default async function DashboardPage() {
               </div>
             </div>
 
-            <div className="mt-5 text-sm text-slate-500">
+            <div className="mt-5 text-center text-sm text-slate-500">
               {completedReadinessChecks} of {readinessChecks.length} tracked status checks complete
             </div>
 
@@ -859,7 +862,10 @@ export default async function DashboardPage() {
           ) : (
             <div className="space-y-3">
               {uniqueIncompleteItems.slice(0, 6).map((alert, index) => (
-                <div key={index} className="flex items-start gap-3 rounded-xl border border-slate-200 p-3">
+                <div
+                  key={index}
+                  className="flex items-start gap-3 rounded-xl border border-slate-200 p-3"
+                >
                   <div className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-red-500" />
                   <div className="text-sm text-slate-700">{alert}</div>
                 </div>
