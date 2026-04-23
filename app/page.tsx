@@ -76,14 +76,28 @@ type CmmcProfileRow = {
   notes: string | null;
 };
 
+type CriticalAction = {
+  label: string;
+  action: string;
+  href: string;
+  severity: "Critical" | "High" | "Medium";
+};
+
 function normalizeStatus(value?: string | null) {
   return String(value || "").toLowerCase();
 }
 
 function isCompleteStatus(value?: string | null) {
-  return ["complete", "completed", "approved", "signed", "verified", "cleared"].includes(
-    normalizeStatus(value)
-  );
+  return [
+    "complete",
+    "completed",
+    "approved",
+    "signed",
+    "verified",
+    "cleared",
+    "active",
+    "audit ready",
+  ].includes(normalizeStatus(value));
 }
 
 function getBadgeClass(status?: string | null) {
@@ -96,7 +110,8 @@ function getBadgeClass(status?: string | null) {
     normalized === "signed" ||
     normalized === "verified" ||
     normalized === "cleared" ||
-    normalized === "active"
+    normalized === "active" ||
+    normalized === "audit ready"
   ) {
     return "bg-green-100 text-green-700";
   }
@@ -105,7 +120,8 @@ function getBadgeClass(status?: string | null) {
     normalized === "in progress" ||
     normalized === "pending" ||
     normalized === "draft" ||
-    normalized === "review required"
+    normalized === "review required" ||
+    normalized === "partial"
   ) {
     return "bg-yellow-100 text-yellow-700";
   }
@@ -114,7 +130,8 @@ function getBadgeClass(status?: string | null) {
     normalized === "expired" ||
     normalized === "overdue" ||
     normalized === "non-compliant" ||
-    normalized === "restricted"
+    normalized === "restricted" ||
+    normalized === "missing"
   ) {
     return "bg-red-100 text-red-700";
   }
@@ -131,57 +148,65 @@ function displayPersonName(person: PersonnelRow) {
   return person.full_name || person.name || "Unnamed Person";
 }
 
+function formatDate(value?: string | null) {
+  if (!value) return "—";
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+
+  return date.toLocaleDateString();
+}
+
 function getProjectReadiness(
   project: ProjectRow,
   docs: ArtifactRow[],
   personnel: PersonnelRow[]
 ) {
-  const checks: boolean[] = [];
-
   const projectDocs = docs.filter((doc) => doc.project_id === project.id);
   const projectPersonnel = personnel.filter((person) => person.project_id === project.id);
 
-  checks.push(projectDocs.length > 0);
-  checks.push(projectDocs.length > 0 && projectDocs.every((doc) => isCompleteStatus(doc.status)));
-  checks.push(
+  const checks: boolean[] = [
+    projectDocs.length > 0,
+    projectDocs.length > 0 && projectDocs.every((doc) => isCompleteStatus(doc.status)),
+    projectPersonnel.length > 0,
     projectPersonnel.length > 0 &&
-      projectPersonnel.every((person) => !!person.secure_machine_name)
-  );
-  checks.push(
-    projectPersonnel.length > 0 &&
-      projectPersonnel.every(
-        (person) => normalizeStatus(person.secure_machine_status) === "verified"
-      )
-  );
-  checks.push(
-    projectPersonnel.length > 0 &&
-      projectPersonnel.every((person) => Boolean(person.training_complete))
-  );
-  checks.push(
+      projectPersonnel.every((person) => Boolean(person.training_complete)),
     projectPersonnel.length > 0 &&
       projectPersonnel.every((person) =>
         ["verified", "approved", "cleared"].includes(
           normalizeStatus(person.citizenship_status)
         )
-      )
-  );
-  checks.push(
+      ),
     projectPersonnel.length > 0 &&
       projectPersonnel.every((person) =>
         ["cleared", "verified", "complete", "completed"].includes(
           normalizeStatus(person.rps_screening_status)
         )
-      )
-  );
+      ),
+    projectPersonnel.length > 0 &&
+      projectPersonnel.every((person) => !!person.secure_machine_name),
+    projectPersonnel.length > 0 &&
+      projectPersonnel.every(
+        (person) => normalizeStatus(person.secure_machine_status) === "verified"
+      ),
+  ];
 
   const completeCount = checks.filter(Boolean).length;
   const totalCount = checks.length;
 
   return {
     percent: formatPercent(completeCount, totalCount),
-    totalCount,
     completeCount,
+    totalCount,
   };
+}
+
+function getEvidenceStatus(doc: ArtifactRow) {
+  if (!doc.status) return "Missing";
+
+  if (isCompleteStatus(doc.status)) return "Complete";
+
+  return "Partial";
 }
 
 export default async function DashboardPage() {
@@ -294,7 +319,8 @@ export default async function DashboardPage() {
   const projects: ProjectRow[] = (projectsResult.data ?? []) as ProjectRow[];
   const artifacts: ArtifactRow[] = (artifactsResult.data ?? []) as ArtifactRow[];
   const personnel: PersonnelRow[] = (personnelResult.data ?? []) as PersonnelRow[];
-  const complianceTeam: ComplianceTeamRow[] = (complianceTeamResult.data ?? []) as ComplianceTeamRow[];
+  const complianceTeam: ComplianceTeamRow[] =
+    (complianceTeamResult.data ?? []) as ComplianceTeamRow[];
   const complianceTeamTraining: ComplianceTeamTrainingRow[] =
     (complianceTeamTrainingResult.data ?? []) as ComplianceTeamTrainingRow[];
   const cmmcProfile: CmmcProfileRow | null =
@@ -309,32 +335,9 @@ export default async function DashboardPage() {
     complianceTeamTrainingMap[key].push(row);
   });
 
-  const incompleteItems: string[] = [];
-  const alerts: string[] = [];
-
   const pendingProjectDocs = artifacts.filter((doc) => !isCompleteStatus(doc.status));
-  pendingProjectDocs.forEach((doc) => {
-    const projectName =
-      projects.find((project) => project.id === doc.project_id)?.project_name ||
-      "Unknown Project";
-    incompleteItems.push(
-      `Project document incomplete: ${doc.title || "Untitled"} (${projectName})`
-    );
-    alerts.push(`Document pending: ${doc.title || "Untitled"} (${projectName})`);
-  });
 
   const personnelTrainingIncomplete = personnel.filter((person) => !person.training_complete);
-  personnelTrainingIncomplete.forEach((person) => {
-    const projectName =
-      projects.find((project) => project.id === person.project_id)?.project_name ||
-      "No Project";
-    incompleteItems.push(
-      `Personnel training incomplete: ${displayPersonName(person)} (${projectName})`
-    );
-    alerts.push(
-      `Personnel training incomplete: ${displayPersonName(person)} (${projectName})`
-    );
-  });
 
   const personnelRpsIncomplete = personnel.filter(
     (person) =>
@@ -342,9 +345,6 @@ export default async function DashboardPage() {
         normalizeStatus(person.rps_screening_status)
       )
   );
-  personnelRpsIncomplete.forEach((person) => {
-    incompleteItems.push(`RPS screening incomplete: ${displayPersonName(person)}`);
-  });
 
   const personnelCitizenshipIncomplete = personnel.filter(
     (person) =>
@@ -352,20 +352,12 @@ export default async function DashboardPage() {
         normalizeStatus(person.citizenship_status)
       )
   );
-  personnelCitizenshipIncomplete.forEach((person) => {
-    incompleteItems.push(
-      `Citizenship verification incomplete: ${displayPersonName(person)}`
-    );
-  });
 
   const personnelSecureMachineIncomplete = personnel.filter(
     (person) =>
       !person.secure_machine_name ||
       normalizeStatus(person.secure_machine_status) !== "verified"
   );
-  personnelSecureMachineIncomplete.forEach((person) => {
-    incompleteItems.push(`Secure machine incomplete: ${displayPersonName(person)}`);
-  });
 
   const incompleteComplianceTeamTraining = complianceTeam.filter((member) => {
     const records = complianceTeamTrainingMap[String(member.id)] || [];
@@ -373,67 +365,105 @@ export default async function DashboardPage() {
     return !records.every((row) => isCompleteStatus(row.status));
   });
 
-  incompleteComplianceTeamTraining.forEach((member) => {
-    const records = complianceTeamTrainingMap[String(member.id)] || [];
-    const incompleteNames = records
-      .filter((row) => !isCompleteStatus(row.status))
-      .map((row) => row.training_name)
-      .filter(Boolean)
-      .join(", ");
-
-    incompleteItems.push(
-      `Compliance team training incomplete: ${member.name || "Unnamed Member"}${
-        incompleteNames ? ` - ${incompleteNames}` : ""
-      }`
-    );
-
-    alerts.push(
-      `Compliance training incomplete: ${member.name || "Unnamed Member"}${
-        incompleteNames ? ` - ${incompleteNames}` : ""
-      }`
-    );
-  });
-
   const controlCards = [
     { label: "SSP", status: cmmcProfile?.ssp_status || "Draft" },
     { label: "POA&M", status: cmmcProfile?.poam_status || "Draft" },
-    { label: "Incident Response", status: cmmcProfile?.incident_response_status || "Draft" },
-    { label: "Access Control", status: cmmcProfile?.access_control_status || "Draft" },
-    { label: "Audit Logging", status: cmmcProfile?.audit_logging_status || "Draft" },
-    { label: "Media Protection", status: cmmcProfile?.media_protection_status || "Draft" },
-    { label: "Training Program", status: cmmcProfile?.training_program_status || "Draft" },
-    { label: "Vendor Management", status: cmmcProfile?.vendor_management_status || "Draft" },
-    { label: "Scoping", status: cmmcProfile?.scoping_status || "Draft" },
+    {
+      label: "Incident Response",
+      status: cmmcProfile?.incident_response_status || "Draft",
+    },
+    {
+      label: "Access Control",
+      status: cmmcProfile?.access_control_status || "Draft",
+    },
+    {
+      label: "Audit Logging",
+      status: cmmcProfile?.audit_logging_status || "Draft",
+    },
+    {
+      label: "Media Protection",
+      status: cmmcProfile?.media_protection_status || "Draft",
+    },
+    {
+      label: "Training Program",
+      status: cmmcProfile?.training_program_status || "Draft",
+    },
+    {
+      label: "Vendor Management",
+      status: cmmcProfile?.vendor_management_status || "Draft",
+    },
+    {
+      label: "Scoping",
+      status: cmmcProfile?.scoping_status || "Draft",
+    },
   ];
 
-  controlCards
-    .filter((card) => !isCompleteStatus(card.status))
-    .forEach((card) => {
-      incompleteItems.push(`${card.label} is still ${card.status}`);
-    });
-
-  const uniqueIncompleteItems = Array.from(new Set(incompleteItems));
-  const uniqueAlerts = Array.from(new Set(alerts)).slice(0, 6);
+  const incompleteControls = controlCards.filter(
+    (card) => !isCompleteStatus(card.status)
+  );
 
   const readinessChecks = [
     { label: "Organization CMMC profile", complete: Boolean(cmmcProfile) },
     { label: "SPRS score entered", complete: typeof cmmcProfile?.sprs_score === "number" },
-    { label: "Assessment status complete", complete: isCompleteStatus(cmmcProfile?.assessment_status) },
+    {
+      label: "Assessment status complete",
+      complete: isCompleteStatus(cmmcProfile?.assessment_status),
+    },
     { label: "SSP complete", complete: isCompleteStatus(cmmcProfile?.ssp_status) },
     { label: "POA&M complete", complete: isCompleteStatus(cmmcProfile?.poam_status) },
-    { label: "Incident response complete", complete: isCompleteStatus(cmmcProfile?.incident_response_status) },
-    { label: "Access control complete", complete: isCompleteStatus(cmmcProfile?.access_control_status) },
-    { label: "Audit logging complete", complete: isCompleteStatus(cmmcProfile?.audit_logging_status) },
-    { label: "Media protection complete", complete: isCompleteStatus(cmmcProfile?.media_protection_status) },
-    { label: "Training program complete", complete: isCompleteStatus(cmmcProfile?.training_program_status) },
-    { label: "Vendor management complete", complete: isCompleteStatus(cmmcProfile?.vendor_management_status) },
-    { label: "Scoping complete", complete: isCompleteStatus(cmmcProfile?.scoping_status) },
-    { label: "All project documents complete", complete: pendingProjectDocs.length === 0 && artifacts.length > 0 },
-    { label: "All personnel training complete", complete: personnel.length > 0 && personnelTrainingIncomplete.length === 0 },
-    { label: "All personnel RPS complete", complete: personnel.length > 0 && personnelRpsIncomplete.length === 0 },
-    { label: "All citizenship verifications complete", complete: personnel.length > 0 && personnelCitizenshipIncomplete.length === 0 },
-    { label: "All secure machines verified", complete: personnel.length > 0 && personnelSecureMachineIncomplete.length === 0 },
-    { label: "Compliance team training complete", complete: complianceTeam.length > 0 && incompleteComplianceTeamTraining.length === 0 },
+    {
+      label: "Incident response complete",
+      complete: isCompleteStatus(cmmcProfile?.incident_response_status),
+    },
+    {
+      label: "Access control complete",
+      complete: isCompleteStatus(cmmcProfile?.access_control_status),
+    },
+    {
+      label: "Audit logging complete",
+      complete: isCompleteStatus(cmmcProfile?.audit_logging_status),
+    },
+    {
+      label: "Media protection complete",
+      complete: isCompleteStatus(cmmcProfile?.media_protection_status),
+    },
+    {
+      label: "Training program complete",
+      complete: isCompleteStatus(cmmcProfile?.training_program_status),
+    },
+    {
+      label: "Vendor management complete",
+      complete: isCompleteStatus(cmmcProfile?.vendor_management_status),
+    },
+    {
+      label: "Scoping complete",
+      complete: isCompleteStatus(cmmcProfile?.scoping_status),
+    },
+    {
+      label: "All project documents complete",
+      complete: pendingProjectDocs.length === 0 && artifacts.length > 0,
+    },
+    {
+      label: "All personnel training complete",
+      complete: personnel.length > 0 && personnelTrainingIncomplete.length === 0,
+    },
+    {
+      label: "All personnel RPS complete",
+      complete: personnel.length > 0 && personnelRpsIncomplete.length === 0,
+    },
+    {
+      label: "All citizenship verifications complete",
+      complete: personnel.length > 0 && personnelCitizenshipIncomplete.length === 0,
+    },
+    {
+      label: "All secure machines verified",
+      complete: personnel.length > 0 && personnelSecureMachineIncomplete.length === 0,
+    },
+    {
+      label: "Compliance team training complete",
+      complete:
+        complianceTeam.length > 0 && incompleteComplianceTeamTraining.length === 0,
+    },
   ];
 
   const completedReadinessChecks = readinessChecks.filter((check) => check.complete).length;
@@ -451,89 +481,221 @@ export default async function DashboardPage() {
     (project) => normalizeStatus(project.status) === "active"
   );
 
-  const documentsCompleteCount = artifacts.filter((doc) => isCompleteStatus(doc.status)).length;
-  const personnelTrainingCompleteCount = personnel.filter((person) => person.training_complete).length;
+  const documentsCompleteCount = artifacts.filter((doc) =>
+    isCompleteStatus(doc.status)
+  ).length;
+
+  const personnelTrainingCompleteCount = personnel.filter(
+    (person) => person.training_complete
+  ).length;
 
   const complianceTeamReadyCount = complianceTeam.filter((member) => {
     const records = complianceTeamTrainingMap[String(member.id)] || [];
     return records.length > 0 && records.every((row) => isCompleteStatus(row.status));
   }).length;
 
+  const evidenceGaps = artifacts
+    .filter((artifact) => !isCompleteStatus(artifact.status))
+    .slice(0, 5);
+
+  const criticalActions: CriticalAction[] = [
+    ...evidenceGaps.slice(0, 3).map((artifact) => ({
+      label: `Upload evidence for ${artifact.title || "missing item"}`,
+      action: "Upload Evidence",
+      href:
+        artifact.project_id != null ? `/projects/${artifact.project_id}` : "/cmmc-compliance",
+      severity: "Critical" as const,
+    })),
+    ...personnelTrainingIncomplete.slice(0, 2).map((person) => ({
+      label: `Resolve training for ${displayPersonName(person)}`,
+      action: "Resolve Training",
+      href: "/personnel",
+      severity: "High" as const,
+    })),
+    ...personnelSecureMachineIncomplete.slice(0, 2).map((person) => ({
+      label: `Verify secure machine for ${displayPersonName(person)}`,
+      action: "Verify Machine",
+      href:
+        person.project_id != null ? `/projects/${person.project_id}` : "/personnel",
+      severity: "High" as const,
+    })),
+  ].slice(0, 5);
+
+  const topRisks = [
+    ...(personnelSecureMachineIncomplete.length > 0
+      ? [
+          {
+            label: `${personnelSecureMachineIncomplete.length} unverified secure machine assignment(s)`,
+            risk: "High Risk",
+          },
+        ]
+      : []),
+    ...(personnelTrainingIncomplete.length > 0
+      ? [
+          {
+            label: `${personnelTrainingIncomplete.length} personnel training item(s) incomplete`,
+            risk: "High Risk",
+          },
+        ]
+      : []),
+    ...(personnelRpsIncomplete.length > 0
+      ? [
+          {
+            label: `${personnelRpsIncomplete.length} personnel screening item(s) incomplete`,
+            risk: "High Risk",
+          },
+        ]
+      : []),
+    ...(pendingProjectDocs.length > 0
+      ? [
+          {
+            label: `${pendingProjectDocs.length} evidence/document item(s) not audit-ready`,
+            risk: "Medium Risk",
+          },
+        ]
+      : []),
+    ...(incompleteControls.length > 0
+      ? [
+          {
+            label: `${incompleteControls.length} CMMC control area(s) still incomplete`,
+            risk: "Medium Risk",
+          },
+        ]
+      : []),
+  ].slice(0, 5);
+
+  const uniqueIncompleteItems = [
+    ...(pendingProjectDocs.length > 0
+      ? [`${pendingProjectDocs.length} project document(s) still incomplete or pending`] 
+      : []),
+    ...(personnelTrainingIncomplete.length > 0
+      ? [`${personnelTrainingIncomplete.length} personnel record(s) missing completed training`]
+      : []),
+    ...(personnelRpsIncomplete.length > 0
+      ? [`${personnelRpsIncomplete.length} personnel record(s) missing completed restricted party screening`]
+      : []),
+    ...(personnelCitizenshipIncomplete.length > 0
+      ? [`${personnelCitizenshipIncomplete.length} personnel record(s) missing citizenship verification`]
+      : []),
+    ...(personnelSecureMachineIncomplete.length > 0
+      ? [`${personnelSecureMachineIncomplete.length} personnel record(s) missing verified secure machine assignment`]
+      : []),
+    ...(incompleteComplianceTeamTraining.length > 0
+      ? [`${incompleteComplianceTeamTraining.length} compliance team member(s) missing completed training coverage`]
+      : []),
+    ...incompleteControls.map(
+      (card) => `${card.label} is still ${card.status || "Draft"}`
+    ),
+  ];
+
   return (
     <div className="space-y-6">
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
-        <h1 className="text-3xl font-bold text-slate-900">Welcome to RCOS</h1>
-        <p className="text-slate-600 mt-1">Research Compliance Oversight System</p>
+      <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <h1 className="text-3xl font-bold text-slate-900">Dashboard</h1>
+        <p className="mt-1 text-slate-600">
+          Action Center for compliance readiness, risk, evidence gaps, and required next steps.
+        </p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
-          <div className="text-sm text-slate-500">Active Projects</div>
-          <div className="mt-2 text-3xl font-bold text-slate-900">
-            {activeProjects.length}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <div className="rounded-2xl border border-red-200 bg-white p-5 shadow-sm">
+          <div className="mb-4 flex items-center justify-between">
+            <h2 className="text-xl font-semibold text-slate-900">Critical Actions</h2>
+            <span className="rounded-full bg-red-100 px-3 py-1 text-xs font-medium text-red-700">
+              {criticalActions.length} Active
+            </span>
           </div>
+
+          {criticalActions.length === 0 ? (
+            <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
+              No critical actions at this time.
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {criticalActions.map((item, index) => (
+                <div
+                  key={`${item.label}-${index}`}
+                  className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 p-3"
+                >
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium text-slate-900">
+                      {item.label}
+                    </div>
+                    <div className="mt-1 text-xs text-red-600">{item.severity}</div>
+                  </div>
+
+                  <Link
+                    href={item.href}
+                    className="shrink-0 rounded-lg bg-red-600 px-3 py-2 text-xs font-medium text-white hover:bg-red-700"
+                  >
+                    {item.action}
+                  </Link>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
-          <div className="text-sm text-slate-500">Pending Authorizations</div>
-          <div className="mt-2 text-3xl font-bold text-slate-900">
-            {
-              projects.filter((project) =>
-                ["pending", "in progress"].includes(normalizeStatus(project.status))
-              ).length
-            }
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="mb-4 text-center">
+            <h2 className="text-xl font-semibold text-slate-900">Institutional Readiness</h2>
           </div>
-        </div>
 
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
-          <div className="text-sm text-slate-500">Incomplete Items</div>
-          <div className="mt-2 text-3xl font-bold text-slate-900">
-            {uniqueIncompleteItems.length}
-          </div>
-          <div className="mt-3">
+          <div className="flex flex-col items-center justify-center">
+            <div className="flex h-40 w-40 items-center justify-center rounded-full border-8 border-blue-100">
+              <div className="text-center">
+                <div className="text-5xl font-bold text-blue-600">{readinessPercent}%</div>
+                <div className="mt-2 text-xs text-slate-500">Overall readiness</div>
+              </div>
+            </div>
+
+            <div className="mt-5 text-sm text-slate-500">
+              {completedReadinessChecks} of {readinessChecks.length} tracked status checks complete
+            </div>
+
             <Link
               href="/cmmc-compliance"
-              className="text-sm font-medium text-blue-600 hover:text-blue-700"
+              className="mt-4 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
             >
-              View incomplete items
+              View Compliance Hub
             </Link>
           </div>
         </div>
 
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
-          <div className="text-sm text-slate-500">Compliance Readiness</div>
-          <div className="mt-3 flex items-center gap-4">
-            <div className="relative h-14 w-14 rounded-full border-4 border-slate-200 flex items-center justify-center">
-              <div
-                className="absolute inset-0 rounded-full"
-                style={{
-                  background: `conic-gradient(#2563eb ${readinessPercent}%, transparent ${readinessPercent}% 100%)`,
-                  WebkitMask:
-                    "radial-gradient(circle at center, transparent 58%, black 60%)",
-                  mask: "radial-gradient(circle at center, transparent 58%, black 60%)",
-                }}
-              />
-              <span className="relative text-xs font-semibold text-slate-900">
-                {readinessPercent}%
-              </span>
-            </div>
-
-            <div>
-              <div className="text-3xl font-bold text-slate-900">
-                {readinessPercent}%
-              </div>
-              <div className="text-sm text-slate-500">
-                {completedReadinessChecks} of {readinessChecks.length} tracked status checks complete
-              </div>
-            </div>
+        <div className="rounded-2xl border border-amber-200 bg-white p-5 shadow-sm">
+          <div className="mb-4 flex items-center justify-between">
+            <h2 className="text-xl font-semibold text-slate-900">Top 5 Risks</h2>
+            <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-700">
+              {topRisks.length} Identified
+            </span>
           </div>
+
+          {topRisks.length === 0 ? (
+            <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
+              No major risks identified.
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {topRisks.map((risk, index) => (
+                <div
+                  key={`${risk.label}-${index}`}
+                  className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 p-3"
+                >
+                  <div className="text-sm text-slate-900">{risk.label}</div>
+                  <span className="shrink-0 rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-700">
+                    {risk.risk}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
-          <div className="flex items-center justify-between gap-4 mb-4">
-            <h2 className="text-xl font-semibold text-slate-900">Project Overview</h2>
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="mb-4 flex items-center justify-between gap-4">
+            <h2 className="text-xl font-semibold text-slate-900">Projects Overview</h2>
             <Link
               href="/projects"
               className="text-sm font-medium text-blue-600 hover:text-blue-700"
@@ -545,62 +707,144 @@ export default async function DashboardPage() {
           {projectReadiness.length === 0 ? (
             <div className="text-sm text-slate-500">No project records found.</div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead>
-                  <tr className="border-b border-slate-200 text-slate-500">
-                    <th className="py-3 pr-4 text-left font-medium">Project</th>
-                    <th className="py-3 pr-4 text-left font-medium">Sponsor</th>
-                    <th className="py-3 pr-4 text-left font-medium">Status</th>
-                    <th className="py-3 pr-4 text-left font-medium">Readiness</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {projectReadiness.slice(0, 5).map((project) => (
-                    <tr key={project.id} className="border-b border-slate-100">
-                      <td className="py-4 pr-4">
-                        <Link
-                          href={`/projects/${project.id}`}
-                          className="font-medium text-blue-600 hover:text-blue-700"
-                        >
-                          {project.project_name || "Untitled Project"}
-                        </Link>
-                      </td>
-                      <td className="py-4 pr-4 text-slate-700">
-                        {project.sponsor || "—"}
-                      </td>
-                      <td className="py-4 pr-4">
-                        <span
-                          className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${getBadgeClass(
-                            project.status
-                          )}`}
-                        >
-                          {project.status || "Pending"}
-                        </span>
-                      </td>
-                      <td className="py-4 pr-4">
-                        <div className="flex items-center gap-3">
-                          <div className="h-2 w-24 rounded-full bg-slate-200 overflow-hidden">
-                            <div
-                              className="h-2 rounded-full bg-blue-600"
-                              style={{ width: `${project.readiness.percent}%` }}
-                            />
-                          </div>
-                          <span className="text-slate-700">
-                            {project.readiness.percent}%
-                          </span>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="space-y-4">
+              {projectReadiness.slice(0, 5).map((project) => (
+                <div key={project.id} className="rounded-xl border border-slate-200 p-4">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <div>
+                      <Link
+                        href={`/projects/${project.id}`}
+                        className="font-medium text-slate-900 hover:text-blue-600"
+                      >
+                        {project.project_name || "Untitled Project"}
+                      </Link>
+                      <div className="mt-1 text-xs text-slate-500">
+                        {project.sponsor || "No sponsor"} • {project.status || "Pending"}
+                      </div>
+                    </div>
+
+                    <span
+                      className={`rounded-full px-2.5 py-1 text-xs font-medium ${getBadgeClass(
+                        project.status
+                      )}`}
+                    >
+                      {project.status || "Pending"}
+                    </span>
+                  </div>
+
+                  <div className="mb-2 flex items-center justify-between text-sm">
+                    <span className="text-slate-600">Compliance Progress</span>
+                    <span className="font-medium text-slate-900">
+                      {project.readiness.percent}%
+                    </span>
+                  </div>
+
+                  <div className="h-2 w-full overflow-hidden rounded-full bg-slate-200">
+                    <div
+                      className="h-2 rounded-full bg-blue-600"
+                      style={{ width: `${project.readiness.percent}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </div>
 
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
-          <div className="flex items-center justify-between gap-4 mb-4">
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="mb-4 flex items-center justify-between gap-4">
+            <h2 className="text-xl font-semibold text-slate-900">Evidence Gaps</h2>
+            <Link
+              href="/cmmc-compliance"
+              className="text-sm font-medium text-blue-600 hover:text-blue-700"
+            >
+              Missing Evidence
+            </Link>
+          </div>
+
+          {evidenceGaps.length === 0 ? (
+            <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
+              All evidence is complete.
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {evidenceGaps.map((gap) => (
+                <div
+                  key={gap.id}
+                  className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 p-3"
+                >
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium text-slate-900">
+                      {gap.title || "Missing Evidence"}
+                    </div>
+                    <div className="mt-1 text-xs text-slate-500">
+                      {gap.artifact_type || "Evidence Item"} • {getEvidenceStatus(gap)}
+                    </div>
+                    <div className="mt-1 text-xs text-slate-400">
+                      Updated {formatDate(gap.created_at)}
+                    </div>
+                  </div>
+
+                  <Link
+                    href={
+                      gap.project_id != null
+                        ? `/projects/${gap.project_id}`
+                        : "/cmmc-compliance"
+                    }
+                    className="shrink-0 rounded-lg bg-blue-600 px-3 py-2 text-xs font-medium text-white hover:bg-blue-700"
+                  >
+                    Upload Evidence
+                  </Link>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="mb-4 flex items-center justify-between gap-4">
+            <h2 className="text-xl font-semibold text-slate-900">Personnel Compliance</h2>
+            <Link
+              href="/personnel"
+              className="text-sm font-medium text-blue-600 hover:text-blue-700"
+            >
+              Manage Personnel
+            </Link>
+          </div>
+
+          <div className="space-y-4">
+            <div className="rounded-xl border border-slate-200 p-4">
+              <div className="text-sm text-slate-500">Training Incomplete</div>
+              <div className="mt-2 text-4xl font-bold text-red-600">
+                {personnelTrainingIncomplete.length}
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 p-4">
+              <div className="text-sm text-slate-500">Unverified Machines</div>
+              <div className="mt-2 text-4xl font-bold text-amber-600">
+                {personnelSecureMachineIncomplete.length}
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 p-4">
+              <div className="text-sm text-slate-500">Authorized / Compliant</div>
+              <div className="mt-2 text-4xl font-bold text-blue-600">
+                {personnel.length === 0
+                  ? "0%"
+                  : `${formatPercent(
+                      personnel.length - personnelTrainingIncomplete.length,
+                      personnel.length
+                    )}%`}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="mb-4 flex items-center justify-between gap-4">
             <h2 className="text-xl font-semibold text-slate-900">Alerts</h2>
             <Link
               href="/cmmc-compliance"
@@ -610,99 +854,28 @@ export default async function DashboardPage() {
             </Link>
           </div>
 
-          {uniqueAlerts.length === 0 ? (
+          {uniqueIncompleteItems.length === 0 ? (
             <div className="text-sm text-slate-500">No active alerts.</div>
           ) : (
-            <div className="space-y-4">
-              {uniqueAlerts.map((alert, index) => (
-                <div key={index} className="flex items-start gap-3">
-                  <div className="mt-2 h-2 w-2 rounded-full bg-red-500 shrink-0" />
+            <div className="space-y-3">
+              {uniqueIncompleteItems.slice(0, 6).map((alert, index) => (
+                <div key={index} className="flex items-start gap-3 rounded-xl border border-slate-200 p-3">
+                  <div className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-red-500" />
                   <div className="text-sm text-slate-700">{alert}</div>
                 </div>
               ))}
             </div>
           )}
         </div>
-      </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
-          <div className="flex items-center justify-between gap-4 mb-4">
-            <h2 className="text-xl font-semibold text-slate-900">
-              Personnel & Training
-            </h2>
-            <Link
-              href="/personnel"
-              className="text-sm font-medium text-blue-600 hover:text-blue-700"
-            >
-              Manage Personnel
-            </Link>
-          </div>
-
-          {personnel.length === 0 ? (
-            <div className="text-sm text-slate-500">No personnel records found.</div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead>
-                  <tr className="border-b border-slate-200 text-slate-500">
-                    <th className="py-3 pr-4 text-left font-medium">Name</th>
-                    <th className="py-3 pr-4 text-left font-medium">Training</th>
-                    <th className="py-3 pr-4 text-left font-medium">RPS</th>
-                    <th className="py-3 pr-4 text-left font-medium">Machine</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {personnel.slice(0, 5).map((person) => (
-                    <tr key={person.id} className="border-b border-slate-100">
-                      <td className="py-4 pr-4 text-slate-900 font-medium">
-                        {displayPersonName(person)}
-                      </td>
-                      <td className="py-4 pr-4">
-                        <span
-                          className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${
-                            person.training_complete
-                              ? "bg-green-100 text-green-700"
-                              : "bg-yellow-100 text-yellow-700"
-                          }`}
-                        >
-                          {person.training_complete ? "Complete" : "Required"}
-                        </span>
-                      </td>
-                      <td className="py-4 pr-4">
-                        <span
-                          className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${getBadgeClass(
-                            person.rps_screening_status
-                          )}`}
-                        >
-                          {person.rps_screening_status || "Not Started"}
-                        </span>
-                      </td>
-                      <td className="py-4 pr-4">
-                        <span
-                          className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${getBadgeClass(
-                            person.secure_machine_status
-                          )}`}
-                        >
-                          {person.secure_machine_status || "Unassigned"}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
-          <div className="flex items-center justify-between gap-4 mb-4">
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="mb-4 flex items-center justify-between gap-4">
             <h2 className="text-xl font-semibold text-slate-900">Readiness Summary</h2>
             <Link
               href="/cmmc-compliance"
-              className="inline-flex items-center justify-center rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition"
+              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
             >
-              View Compliance Hub
+              Compliance
             </Link>
           </div>
 
@@ -710,62 +883,49 @@ export default async function DashboardPage() {
             <div className="flex items-start justify-between gap-4 border-b border-slate-100 pb-3">
               <div className="text-slate-700">Projects</div>
               <div className="text-right text-slate-900">
-                <div>{activeProjects.length} active project records</div>
+                {activeProjects.length} active project records
               </div>
             </div>
 
             <div className="flex items-start justify-between gap-4 border-b border-slate-100 pb-3">
-              <div className="text-slate-700">Documents</div>
+              <div className="text-slate-700">Documents / Evidence</div>
               <div className="text-right text-slate-900">
-                <div>
-                  {documentsCompleteCount} complete / {artifacts.length} total
-                </div>
+                {documentsCompleteCount} complete / {artifacts.length} total
               </div>
             </div>
 
             <div className="flex items-start justify-between gap-4 border-b border-slate-100 pb-3">
               <div className="text-slate-700">Personnel</div>
               <div className="text-right text-slate-900">
-                <div>{personnel.length} assigned personnel records</div>
+                {personnel.length} assigned personnel records
               </div>
             </div>
 
             <div className="flex items-start justify-between gap-4 border-b border-slate-100 pb-3">
               <div className="text-slate-700">Personnel Training</div>
               <div className="text-right text-slate-900">
-                <div>
-                  {personnelTrainingCompleteCount} complete / {personnel.length} total
-                </div>
+                {personnelTrainingCompleteCount} complete / {personnel.length} total
               </div>
             </div>
 
             <div className="flex items-start justify-between gap-4 border-b border-slate-100 pb-3">
               <div className="text-slate-700">Compliance Team</div>
               <div className="text-right text-slate-900">
-                <div>{complianceTeam.length} rostered members</div>
+                {complianceTeamReadyCount} ready / {complianceTeam.length} total
               </div>
             </div>
 
             <div className="flex items-start justify-between gap-4 border-b border-slate-100 pb-3">
-              <div className="text-slate-700">Compliance Team Training</div>
+              <div className="text-slate-700">SPRS Score</div>
               <div className="text-right text-slate-900">
-                <div>
-                  {complianceTeamReadyCount} ready / {complianceTeam.length} total
-                </div>
-              </div>
-            </div>
-
-            <div className="flex items-start justify-between gap-4 border-b border-slate-100 pb-3">
-              <div className="text-slate-700">CMMC Program</div>
-              <div className="text-right text-slate-900">
-                <div>{cmmcProfile ? "Profile tracked" : "Profile not started"}</div>
+                {cmmcProfile?.sprs_score ?? "—"}
               </div>
             </div>
 
             <div className="flex items-start justify-between gap-4">
-              <div className="text-slate-700 font-medium">Organization Readiness</div>
-              <div className="text-right text-slate-900 font-semibold">
-                <div>{readinessPercent}% complete</div>
+              <div className="font-medium text-slate-700">Organization Readiness</div>
+              <div className="text-right font-semibold text-slate-900">
+                {readinessPercent}% complete
               </div>
             </div>
           </div>
