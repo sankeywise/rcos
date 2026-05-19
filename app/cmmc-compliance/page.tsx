@@ -1,33 +1,77 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { createServerSupabaseClient } from "@/lib/supabase-server";
 
-function getBadgeClass(status?: string | null) {
-  const normalized = String(status || "").toLowerCase();
+type ControlFamily = {
+  id: number;
+  code: string;
+  name: string;
+  total_controls: number;
+  sort_order: number;
+};
 
-  if (
-    normalized === "complete" ||
-    normalized === "completed" ||
-    normalized === "approved" ||
-    normalized === "active" ||
-    normalized === "verified"
-  ) {
+type CmmcDocument = {
+  id: number;
+  organization_id: string;
+  document_name: string;
+  document_type: string | null;
+  control_family_code: string | null;
+  status: string | null;
+  owner: string | null;
+  file_path: string | null;
+  last_updated: string | null;
+  notes: string | null;
+  created_at: string | null;
+};
+
+type CmmcProfile = {
+  id: number;
+  organization_id: string;
+  enclave_name: string | null;
+  cmmc_level_target: string | null;
+  sprs_score: number | null;
+  sprs_last_updated: string | null;
+  assessment_status: string | null;
+  ssp_status: string | null;
+  poam_status: string | null;
+  incident_response_status: string | null;
+  access_control_status: string | null;
+  audit_logging_status: string | null;
+  media_protection_status: string | null;
+  training_program_status: string | null;
+  vendor_management_status: string | null;
+  scoping_status: string | null;
+  notes: string | null;
+};
+
+function normalizeStatus(value?: string | null) {
+  return String(value || "").toLowerCase();
+}
+
+function isCompleteStatus(value?: string | null) {
+  return ["complete", "completed", "approved", "signed", "verified", "audit-ready", "audit ready"].includes(
+    normalizeStatus(value)
+  );
+}
+
+function getBadgeClass(status?: string | null) {
+  const normalized = normalizeStatus(status);
+
+  if (isCompleteStatus(status)) {
     return "bg-green-100 text-green-700";
   }
 
   if (
     normalized === "in progress" ||
     normalized === "pending" ||
-    normalized === "draft"
+    normalized === "partial" ||
+    normalized === "review required"
   ) {
     return "bg-blue-100 text-blue-700";
   }
 
-  if (
-    normalized === "expired" ||
-    normalized === "overdue" ||
-    normalized === "non-compliant"
-  ) {
+  if (normalized === "missing" || normalized === "overdue" || normalized === "expired") {
     return "bg-red-100 text-red-700";
   }
 
@@ -43,13 +87,39 @@ function formatDate(value?: string | null) {
   return date.toLocaleDateString();
 }
 
-function normalizeStatus(value?: string | null) {
-  return String(value || "").toLowerCase();
+function getFamilyBadgeClass(code?: string | null) {
+  const colors: Record<string, string> = {
+    AC: "bg-blue-100 text-blue-700",
+    AT: "bg-purple-100 text-purple-700",
+    AU: "bg-cyan-100 text-cyan-700",
+    CM: "bg-orange-100 text-orange-700",
+    IA: "bg-indigo-100 text-indigo-700",
+    IR: "bg-slate-100 text-slate-700",
+    MA: "bg-stone-100 text-stone-700",
+    MP: "bg-red-100 text-red-700",
+    PE: "bg-violet-100 text-violet-700",
+    PS: "bg-sky-100 text-sky-700",
+    RA: "bg-emerald-100 text-emerald-700",
+    CA: "bg-amber-100 text-amber-700",
+    SC: "bg-teal-100 text-teal-700",
+    SI: "bg-rose-100 text-rose-700",
+  };
+
+  return colors[String(code || "")] || "bg-slate-100 text-slate-700";
 }
 
-function isCompleteStatus(value?: string | null) {
-  const normalized = normalizeStatus(value);
-  return ["complete", "completed", "approved", "verified"].includes(normalized);
+function mapProfileStatusToDocumentStatus(documentName: string, profile: CmmcProfile | null) {
+  const name = documentName.toLowerCase();
+
+  if (name.includes("system security plan")) return profile?.ssp_status || "Draft";
+  if (name.includes("incident")) return profile?.incident_response_status || "Draft";
+  if (name.includes("access")) return profile?.access_control_status || "Draft";
+  if (name.includes("logging") || name.includes("auditing")) return profile?.audit_logging_status || "Draft";
+  if (name.includes("media")) return profile?.media_protection_status || "Draft";
+  if (name.includes("training")) return profile?.training_program_status || "Draft";
+  if (name.includes("security assessment")) return profile?.scoping_status || "Draft";
+
+  return null;
 }
 
 export default async function CMMCCompliancePage() {
@@ -71,219 +141,85 @@ export default async function CMMCCompliancePage() {
     .single();
 
   if (membershipError || !membership) {
-    return (
-      <div className="p-6 text-red-600">
-        No organization membership found.
-      </div>
-    );
+    return <div className="p-6 text-red-600">No organization membership found.</div>;
   }
 
   const orgId = membership.organization_id;
 
-  const { data: profile } = await supabase
+  const familiesResult = await supabase
+    .from("cmmc_control_families")
+    .select("*")
+    .order("sort_order", { ascending: true });
+
+  const documentsResult = await supabase
+    .from("cmmc_documents")
+    .select("*")
+    .eq("organization_id", orgId)
+    .order("document_name", { ascending: true });
+
+  const profileResult = await supabase
     .from("cmmc_compliance_profiles")
     .select("*")
     .eq("organization_id", orgId)
     .maybeSingle();
 
-  const { data: artifacts } = await supabase
-    .from("artifacts")
-    .select(`
-      id,
-      organization_id,
-      title,
-      artifact_type,
-      status,
-      created_at,
-      file_path,
-      project_id
-    `)
-    .eq("organization_id", orgId)
-    .order("created_at", { ascending: false });
+  const families: ControlFamily[] = (familiesResult.data ?? []) as ControlFamily[];
+  const rawDocuments: CmmcDocument[] = (documentsResult.data ?? []) as CmmcDocument[];
+  const profile: CmmcProfile | null = (profileResult.data as CmmcProfile | null) ?? null;
 
-  const { data: personnel } = await supabase
-    .from("personnel")
-    .select(`
-      id,
-      organization_id,
-      training_complete,
-      rps_screening_status,
-      citizenship_status,
-      secure_machine_name,
-      secure_machine_status
-    `)
-    .eq("organization_id", orgId);
+  const documents = rawDocuments.map((doc) => {
+    const profileMappedStatus = mapProfileStatusToDocumentStatus(doc.document_name, profile);
 
-  const { data: complianceTeam } = await supabase
-    .from("compliance_team")
-    .select(`
-      id,
-      organization_id,
-      name
-    `)
-    .eq("organization_id", orgId);
-
-  const { data: complianceTeamTraining } = await supabase
-    .from("compliance_team_training_records")
-    .select(`
-      id,
-      compliance_team_id,
-      status
-    `);
-
-  const cmmcDocs = (artifacts || []).filter((doc) => {
-    const title = String(doc.title || "").toLowerCase();
-    const type = String(doc.artifact_type || "").toLowerCase();
-
-    return (
-      title.includes("ssp") ||
-      title.includes("sprs") ||
-      title.includes("poam") ||
-      title.includes("system security plan") ||
-      title.includes("plan of action") ||
-      title.includes("cmmc") ||
-      title.includes("nist") ||
-      title.includes("800-171") ||
-      title.includes("incident response") ||
-      title.includes("access control") ||
-      title.includes("media protection") ||
-      title.includes("audit") ||
-      title.includes("logging") ||
-      type.includes("ssp") ||
-      type.includes("sprs") ||
-      type.includes("poam") ||
-      type.includes("cmmc")
-    );
+    return {
+      ...doc,
+      status: profileMappedStatus || doc.status || "Draft",
+    };
   });
 
-  const completedDocs = cmmcDocs.filter((doc) => isCompleteStatus(doc.status));
-  const pendingDocs = cmmcDocs.filter((doc) => !isCompleteStatus(doc.status));
+  const completeDocuments = documents.filter((doc) => isCompleteStatus(doc.status));
+  const inProgressDocuments = documents.filter((doc) =>
+    ["in progress", "pending", "partial", "review required"].includes(normalizeStatus(doc.status))
+  );
+  const missingDocuments = documents.filter((doc) =>
+    ["missing", "not started"].includes(normalizeStatus(doc.status))
+  );
+  const draftDocuments = documents.filter((doc) => normalizeStatus(doc.status) === "draft");
 
-  const complianceTeamTrainingMap: Record<string, any[]> = {};
-  (complianceTeamTraining || []).forEach((row) => {
-    const key = String(row.compliance_team_id);
-    if (!complianceTeamTrainingMap[key]) {
-      complianceTeamTrainingMap[key] = [];
-    }
-    complianceTeamTrainingMap[key].push(row);
-  });
+  const totalControls = families.reduce((sum, family) => sum + family.total_controls, 0) || 110;
 
-  const incompleteComplianceTeamMembers = (complianceTeam || []).filter((member) => {
-    const records = complianceTeamTrainingMap[String(member.id)] || [];
-    if (records.length === 0) return true;
-    return !records.every((row) => isCompleteStatus(row.status));
-  }).length;
-
-  const incompletePersonnelTraining =
-    (personnel || []).filter((person) => !person.training_complete).length || 0;
-
-  const incompletePersonnelRps =
-    (personnel || []).filter(
-      (person) =>
-        !["cleared", "verified", "complete", "completed"].includes(
-          normalizeStatus(person.rps_screening_status)
-        )
-    ).length || 0;
-
-  const incompletePersonnelCitizenship =
-    (personnel || []).filter(
-      (person) =>
-        !["verified", "approved", "cleared"].includes(
-          normalizeStatus(person.citizenship_status)
-        )
-    ).length || 0;
-
-  const incompleteSecureMachines =
-    (personnel || []).filter(
-      (person) =>
-        !person.secure_machine_name ||
-        normalizeStatus(person.secure_machine_status) !== "verified"
-    ).length || 0;
-
-  const controlCards = [
-    {
-      label: "SSP",
-      status: profile?.ssp_status || "Draft",
-    },
-    {
-      label: "POA&M",
-      status: profile?.poam_status || "Draft",
-    },
-    {
-      label: "Incident Response",
-      status: profile?.incident_response_status || "Draft",
-    },
-    {
-      label: "Access Control",
-      status: profile?.access_control_status || "Draft",
-    },
-    {
-      label: "Audit Logging",
-      status: profile?.audit_logging_status || "Draft",
-    },
-    {
-      label: "Media Protection",
-      status: profile?.media_protection_status || "Draft",
-    },
-    {
-      label: "Training Program",
-      status: profile?.training_program_status || "Draft",
-    },
-    {
-      label: "Vendor Management",
-      status: profile?.vendor_management_status || "Draft",
-    },
-    {
-      label: "Scoping",
-      status: profile?.scoping_status || "Draft",
-    },
+  const controlStatusCards = [
+    { label: "SSP", status: profile?.ssp_status || "Draft" },
+    { label: "POA&M", status: profile?.poam_status || "Draft" },
+    { label: "Incident Response", status: profile?.incident_response_status || "Draft" },
+    { label: "Access Control", status: profile?.access_control_status || "Draft" },
+    { label: "Audit Logging", status: profile?.audit_logging_status || "Draft" },
+    { label: "Media Protection", status: profile?.media_protection_status || "Draft" },
+    { label: "Training Program", status: profile?.training_program_status || "Draft" },
+    { label: "Vendor Management", status: profile?.vendor_management_status || "Draft" },
+    { label: "Scoping", status: profile?.scoping_status || "Draft" },
   ];
 
-  const completedControlCount = controlCards.filter((card) =>
-    isCompleteStatus(card.status)
+  const completeControlAreas = controlStatusCards.filter((card) => isCompleteStatus(card.status)).length;
+  const inProgressControlAreas = controlStatusCards.filter((card) =>
+    ["in progress", "pending", "partial", "review required"].includes(normalizeStatus(card.status))
   ).length;
+  const notStartedControlAreas = controlStatusCards.length - completeControlAreas - inProgressControlAreas;
 
-  const totalChecklistItems =
-    controlCards.length + 5;
-
-  const completedChecklistItems =
-    completedControlCount +
-    (completedDocs.length > 0 ? 1 : 0) +
-    (incompleteComplianceTeamMembers === 0 && (complianceTeam || []).length > 0 ? 1 : 0) +
-    (incompletePersonnelTraining === 0 && (personnel || []).length > 0 ? 1 : 0) +
-    (incompletePersonnelRps === 0 && (personnel || []).length > 0 ? 1 : 0) +
-    (incompleteSecureMachines === 0 && (personnel || []).length > 0 ? 1 : 0);
+  const auditReadyControls = completeControlAreas;
+  const inProgressControls = inProgressControlAreas + inProgressDocuments.length;
+  const notStartedControls = Math.max(totalControls - auditReadyControls - inProgressControls, 0);
+  const overdueControls = missingDocuments.length;
 
   const readinessPercent =
-    totalChecklistItems === 0
-      ? 0
-      : Math.round((completedChecklistItems / totalChecklistItems) * 100);
+    totalControls === 0 ? 0 : Math.round((auditReadyControls / totalControls) * 100);
 
-  const incompleteItems = [
-    ...(pendingDocs.length > 0
-      ? [`${pendingDocs.length} CMMC document(s) still draft, pending, or incomplete`]
-      : []),
-    ...(incompleteComplianceTeamMembers > 0
-      ? [`${incompleteComplianceTeamMembers} compliance team member(s) missing completed training coverage`]
-      : []),
-    ...(incompletePersonnelTraining > 0
-      ? [`${incompletePersonnelTraining} personnel record(s) missing completed training`]
-      : []),
-    ...(incompletePersonnelRps > 0
-      ? [`${incompletePersonnelRps} personnel record(s) missing completed restricted party screening`]
-      : []),
-    ...(incompletePersonnelCitizenship > 0
-      ? [`${incompletePersonnelCitizenship} personnel record(s) missing citizenship verification`]
-      : []),
-    ...(incompleteSecureMachines > 0
-      ? [`${incompleteSecureMachines} personnel record(s) missing verified secure machine assignment`]
-      : []),
-    ...controlCards
-      .filter((card) => !isCompleteStatus(card.status))
-      .map((card) => `${card.label} is still ${card.status || "Draft"}`),
-  ];
+  const familyDocumentCount: Record<string, number> = {};
+  documents.forEach((doc) => {
+    const code = doc.control_family_code || "UN";
+    familyDocumentCount[code] = (familyDocumentCount[code] || 0) + 1;
+  });
 
-  async function saveCmmcProfile(formData: FormData) {
+  async function saveDocumentStatus(formData: FormData) {
     "use server";
 
     const supabase = await createServerSupabaseClient();
@@ -307,40 +243,74 @@ export default async function CMMCCompliancePage() {
       redirect("/");
     }
 
-    const payload = {
-      organization_id: membership.organization_id,
-      enclave_name: String(formData.get("enclave_name") || "").trim() || null,
-      cmmc_level_target:
-        String(formData.get("cmmc_level_target") || "").trim() || "Level 2",
-      sprs_score: String(formData.get("sprs_score") || "").trim()
-        ? Number(formData.get("sprs_score"))
-        : null,
-      sprs_last_updated:
-        String(formData.get("sprs_last_updated") || "").trim() || null,
-      assessment_status:
-        String(formData.get("assessment_status") || "").trim() || "In Progress",
-      ssp_status: String(formData.get("ssp_status") || "").trim() || "Draft",
-      poam_status: String(formData.get("poam_status") || "").trim() || "Draft",
-      incident_response_status:
-        String(formData.get("incident_response_status") || "").trim() || "Draft",
-      access_control_status:
-        String(formData.get("access_control_status") || "").trim() || "Draft",
-      audit_logging_status:
-        String(formData.get("audit_logging_status") || "").trim() || "Draft",
-      media_protection_status:
-        String(formData.get("media_protection_status") || "").trim() || "Draft",
-      training_program_status:
-        String(formData.get("training_program_status") || "").trim() || "Draft",
-      vendor_management_status:
-        String(formData.get("vendor_management_status") || "").trim() || "Draft",
-      scoping_status:
-        String(formData.get("scoping_status") || "").trim() || "Draft",
-      notes: String(formData.get("notes") || "").trim() || null,
-    };
+    const documentId = String(formData.get("document_id") || "").trim();
+    const status = String(formData.get("status") || "Draft").trim();
+    const owner = String(formData.get("owner") || "").trim() || null;
+
+    if (!documentId) {
+      throw new Error("Document is required.");
+    }
 
     const { error } = await supabase
-      .from("cmmc_compliance_profiles")
-      .upsert(payload, { onConflict: "organization_id" });
+      .from("cmmc_documents")
+      .update({
+        status,
+        owner,
+        last_updated: new Date().toISOString().slice(0, 10),
+      })
+      .eq("id", Number(documentId))
+      .eq("organization_id", membership.organization_id);
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    revalidatePath("/cmmc-compliance");
+    revalidatePath("/");
+  }
+
+  async function addDocument(formData: FormData) {
+    "use server";
+
+    const supabase = await createServerSupabaseClient();
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      redirect("/login");
+    }
+
+    const { data: membership } = await supabase
+      .from("organization_memberships")
+      .select("organization_id")
+      .eq("user_id", user.id)
+      .eq("is_active", true)
+      .single();
+
+    if (!membership) {
+      redirect("/");
+    }
+
+    const documentName = String(formData.get("document_name") || "").trim();
+    const documentType = String(formData.get("document_type") || "Policy").trim();
+    const controlFamilyCode = String(formData.get("control_family_code") || "").trim();
+    const owner = String(formData.get("owner") || "").trim() || null;
+
+    if (!documentName) {
+      throw new Error("Document name is required.");
+    }
+
+    const { error } = await supabase.from("cmmc_documents").insert({
+      organization_id: membership.organization_id,
+      document_name: documentName,
+      document_type: documentType,
+      control_family_code: controlFamilyCode || null,
+      status: "Draft",
+      owner,
+      last_updated: new Date().toISOString().slice(0, 10),
+    });
 
     if (error) {
       throw new Error(error.message);
@@ -352,365 +322,310 @@ export default async function CMMCCompliancePage() {
 
   return (
     <div className="space-y-6">
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
-        <h1 className="text-3xl font-bold text-slate-900">CMMC Compliance</h1>
-        <p className="text-slate-600 mt-1">
-          Organization-level view for SPRS, SSP, POA&amp;M, enclave readiness, and related CMMC/NIST 800-171 compliance items.
-        </p>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
-          <div className="text-sm text-slate-500">SPRS Score</div>
-          <div className="mt-2 text-3xl font-bold text-slate-900">
-            {profile?.sprs_score ?? "—"}
-          </div>
-          <div className="mt-2 text-xs text-slate-500">
-            Updated {formatDate(profile?.sprs_last_updated)}
-          </div>
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-slate-900">CMMC Control Readiness</h1>
+          <p className="mt-1 text-sm text-slate-600">
+            Manage core CMMC/NIST documents, control families, readiness status, owners, and evidence gaps.
+          </p>
         </div>
 
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
-          <div className="text-sm text-slate-500">CMMC Target</div>
-          <div className="mt-2 text-3xl font-bold text-slate-900">
-            {profile?.cmmc_level_target || "Level 2"}
-          </div>
-          <div className="mt-2 text-xs text-slate-500">
-            Enclave: {profile?.enclave_name || "Not entered"}
-          </div>
-        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <Link
+            href="/"
+            className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
+          >
+            Back to Action Center
+          </Link>
 
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
-          <div className="text-sm text-slate-500">Assessment Status</div>
-          <div className="mt-2">
-            <span
-              className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${getBadgeClass(
-                profile?.assessment_status
-              )}`}
-            >
-              {profile?.assessment_status || "In Progress"}
-            </span>
-          </div>
-        </div>
-
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
-          <div className="text-sm text-slate-500">Incomplete Items</div>
-          <div className="mt-2 text-3xl font-bold text-slate-900">
-            {incompleteItems.length}
-          </div>
-        </div>
-
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
-          <div className="text-sm text-slate-500">Readiness</div>
-          <div className="mt-2 text-3xl font-bold text-slate-900">
-            {readinessPercent}%
-          </div>
+          <button className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50">
+            Export Report
+          </button>
         </div>
       </div>
 
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
-        <h2 className="text-xl font-semibold text-slate-900">Open Compliance Items</h2>
-        {incompleteItems.length === 0 ? (
-          <div className="mt-4 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">
-            No open organization-level CMMC compliance items detected.
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-6">
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="text-sm font-medium text-slate-700">Overall Readiness</div>
+          <div className="mt-4 flex items-center gap-4">
+            <div className="flex h-20 w-20 items-center justify-center rounded-full border-8 border-blue-100">
+              <div className="text-xl font-bold text-blue-600">{readinessPercent}%</div>
+            </div>
+            <div className="text-sm text-slate-500">
+              {auditReadyControls} of {totalControls} controls audit-ready
+            </div>
           </div>
-        ) : (
-          <div className="mt-4 space-y-2">
-            {incompleteItems.map((item, index) => (
-              <div
-                key={index}
-                className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="text-sm font-medium text-slate-700">Documents</div>
+          <div className="mt-5 text-4xl font-bold text-slate-900">{documents.length}</div>
+          <div className="mt-1 text-xs text-slate-500">Total documents managed</div>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="text-sm font-medium text-slate-700">Complete</div>
+          <div className="mt-5 text-4xl font-bold text-slate-900">{completeDocuments.length}</div>
+          <div className="mt-1 text-xs text-slate-500">Documents complete</div>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="text-sm font-medium text-slate-700">In Progress</div>
+          <div className="mt-5 text-4xl font-bold text-slate-900">{inProgressDocuments.length}</div>
+          <div className="mt-1 text-xs text-slate-500">Documents in progress</div>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="text-sm font-medium text-slate-700">Draft</div>
+          <div className="mt-5 text-4xl font-bold text-slate-900">{draftDocuments.length}</div>
+          <div className="mt-1 text-xs text-slate-500">Documents still draft</div>
+        </div>
+
+        <div className="rounded-2xl border border-red-200 bg-white p-5 shadow-sm">
+          <div className="text-sm font-medium text-slate-700">Missing / Overdue</div>
+          <div className="mt-5 text-4xl font-bold text-red-600">{overdueControls}</div>
+          <div className="mt-1 text-xs text-slate-500">Needs immediate review</div>
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+          <div className="flex flex-wrap gap-2">
+            <button className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white">
+              Control Areas
+            </button>
+            <button className="rounded-xl px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50">
+              All Controls ({totalControls})
+            </button>
+            <button className="rounded-xl px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50">
+              Documents ({documents.length})
+            </button>
+          </div>
+
+          <div className="flex flex-col gap-3 md:flex-row">
+            <select className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700">
+              <option>All Statuses</option>
+              <option>Draft</option>
+              <option>In Progress</option>
+              <option>Complete</option>
+              <option>Missing</option>
+            </select>
+
+            <input
+              placeholder="Search documents..."
+              className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
+            />
+
+            <form action={addDocument} className="flex gap-2">
+              <input
+                type="text"
+                name="document_name"
+                placeholder="New document"
+                className="w-40 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
+              />
+              <select
+                name="control_family_code"
+                className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
               >
-                {item}
+                <option value="">Area</option>
+                {families.map((family) => (
+                  <option key={family.code} value={family.code}>
+                    {family.code}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="submit"
+                className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+              >
+                Add
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[0.8fr_2fr_0.9fr]">
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="text-lg font-semibold text-slate-900">CMMC Control Areas (14)</h2>
+
+          <div className="mt-4 space-y-2">
+            {families.map((family) => (
+              <div
+                key={family.code}
+                className="flex items-center justify-between rounded-xl border border-slate-100 px-3 py-2"
+              >
+                <div className="flex items-center gap-3">
+                  <span
+                    className={`inline-flex h-7 w-8 items-center justify-center rounded-lg text-xs font-bold ${getFamilyBadgeClass(
+                      family.code
+                    )}`}
+                  >
+                    {family.code}
+                  </span>
+                  <div className="text-sm text-slate-700">{family.name}</div>
+                </div>
+
+                <div className="text-sm font-medium text-slate-600">
+                  {familyDocumentCount[family.code] || 0} / {family.total_controls}
+                </div>
               </div>
             ))}
           </div>
-        )}
-      </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-        <div className="xl:col-span-2 space-y-6">
-          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
-            <div className="flex items-center justify-between gap-4 mb-4">
-              <h2 className="text-xl font-semibold text-slate-900">
-                CMMC / NIST Documents
-              </h2>
-              <div className="text-sm text-slate-500">
-                {cmmcDocs.length} item{cmmcDocs.length === 1 ? "" : "s"}
-              </div>
-            </div>
+          <button className="mt-5 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-medium text-blue-600 hover:bg-blue-50">
+            View All Controls ({totalControls})
+          </button>
+        </div>
 
-            {cmmcDocs.length === 0 ? (
-              <div className="text-sm text-slate-500">
-                No CMMC-specific documents identified yet.
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {cmmcDocs.map((doc) => (
-                  <div
-                    key={doc.id}
-                    className="rounded-xl border border-slate-200 px-4 py-4"
-                  >
-                    <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                      <div>
-                        <div className="font-medium text-slate-900">
-                          {doc.title || "Untitled"}
-                        </div>
-                        <div className="mt-1 text-xs text-slate-500">
-                          {doc.artifact_type || "Compliance Item"} • {formatDate(doc.created_at)}
-                        </div>
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="mb-4">
+            <h2 className="text-lg font-semibold text-slate-900">Key CMMC / NIST Documents</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Core organizational documents mapped to CMMC control areas and readiness status.
+            </p>
+          </div>
+
+          <div className="overflow-hidden rounded-xl border border-slate-200">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                <tr>
+                  <th className="px-4 py-3">Document Name</th>
+                  <th className="px-4 py-3">Area</th>
+                  <th className="px-4 py-3">Status</th>
+                  <th className="px-4 py-3">Updated</th>
+                  <th className="px-4 py-3">Owner</th>
+                  <th className="px-4 py-3">Update</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {documents.slice(0, 14).map((doc) => (
+                  <tr key={doc.id} className="hover:bg-slate-50">
+                    <td className="px-4 py-4">
+                      <div className="font-medium text-slate-900">{doc.document_name}</div>
+                      <div className="mt-1 text-xs text-slate-500">
+                        {doc.document_type || "Policy"}
                       </div>
+                    </td>
 
+                    <td className="px-4 py-4">
                       <span
-                        className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${getBadgeClass(
+                        className={`inline-flex rounded-lg px-2.5 py-1 text-xs font-bold ${getFamilyBadgeClass(
+                          doc.control_family_code
+                        )}`}
+                      >
+                        {doc.control_family_code || "—"}
+                      </span>
+                    </td>
+
+                    <td className="px-4 py-4">
+                      <span
+                        className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${getBadgeClass(
                           doc.status
                         )}`}
                       >
-                        {doc.status || "Pending"}
+                        {doc.status || "Draft"}
                       </span>
-                    </div>
-                  </div>
+                    </td>
+
+                    <td className="px-4 py-4 text-slate-600">{formatDate(doc.last_updated)}</td>
+                    <td className="px-4 py-4 text-slate-600">{doc.owner || "Unassigned"}</td>
+
+                    <td className="px-4 py-4">
+                      <form action={saveDocumentStatus} className="flex gap-2">
+                        <input type="hidden" name="document_id" value={doc.id} />
+                        <input type="hidden" name="owner" value={doc.owner || ""} />
+                        <select
+                          name="status"
+                          defaultValue={doc.status || "Draft"}
+                          className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs"
+                        >
+                          <option value="Draft">Draft</option>
+                          <option value="In Progress">In Progress</option>
+                          <option value="Pending">Pending</option>
+                          <option value="Complete">Complete</option>
+                          <option value="Approved">Approved</option>
+                          <option value="Missing">Missing</option>
+                        </select>
+                        <button
+                          type="submit"
+                          className="rounded-lg bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700"
+                        >
+                          Save
+                        </button>
+                      </form>
+                    </td>
+                  </tr>
                 ))}
-              </div>
-            )}
+              </tbody>
+            </table>
           </div>
 
-          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
-            <h2 className="text-xl font-semibold text-slate-900">
-              CMMC Control Readiness
-            </h2>
+          <div className="mt-4">
+            <Link
+              href="/cmmc-compliance"
+              className="text-sm font-medium text-blue-600 hover:text-blue-700"
+            >
+              View all documents ({documents.length}) →
+            </Link>
+          </div>
+        </div>
 
-            <div className="mt-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-              {controlCards.map((card) => (
-                <div
-                  key={card.label}
-                  className="rounded-xl border border-slate-200 px-4 py-4"
-                >
-                  <div className="text-sm font-medium text-slate-900">
-                    {card.label}
-                  </div>
-                  <div className="mt-2">
-                    <span
-                      className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${getBadgeClass(
-                        card.status
-                      )}`}
-                    >
-                      {card.status || "Draft"}
-                    </span>
+        <div className="space-y-6">
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 className="text-lg font-semibold text-slate-900">Control Readiness Summary</h2>
+
+            <div className="mt-5 flex items-center justify-center">
+              <div className="flex h-32 w-32 items-center justify-center rounded-full border-[16px] border-slate-200">
+                <div className="text-center">
+                  <div className="text-3xl font-bold text-slate-900">{totalControls}</div>
+                  <div className="text-xs text-slate-500">Total Controls</div>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-5 space-y-3 text-sm">
+              <div className="flex justify-between">
+                <span className="text-slate-600">Audit-Ready</span>
+                <span className="font-medium text-slate-900">{auditReadyControls}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-600">In Progress</span>
+                <span className="font-medium text-slate-900">{inProgressControls}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-600">Not Started</span>
+                <span className="font-medium text-slate-900">{notStartedControls}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-600">Missing / Overdue</span>
+                <span className="font-medium text-red-600">{overdueControls}</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 className="text-lg font-semibold text-slate-900">Recent Activity</h2>
+
+            <div className="mt-4 space-y-4 text-sm">
+              {documents.slice(0, 5).map((doc) => (
+                <div key={doc.id} className="border-b border-slate-100 pb-3 last:border-b-0">
+                  <div className="font-medium text-slate-900">Document reviewed</div>
+                  <div className="mt-1 text-slate-600">{doc.document_name}</div>
+                  <div className="mt-1 text-xs text-slate-400">
+                    Updated {formatDate(doc.last_updated)} by {doc.owner || "Unassigned"}
                   </div>
                 </div>
               ))}
             </div>
-          </div>
 
-          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
-            <h2 className="text-xl font-semibold text-slate-900">
-              Readiness Drivers
-            </h2>
-
-            <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-              <div className="rounded-xl border border-slate-200 px-4 py-4">
-                <div className="text-xs uppercase tracking-wide text-slate-500">
-                  Compliance Team Training
-                </div>
-                <div className="mt-2 text-2xl font-bold text-slate-900">
-                  {incompleteComplianceTeamMembers === 0 ? "Ready" : incompleteComplianceTeamMembers}
-                </div>
-                <div className="mt-1 text-slate-500">
-                  {incompleteComplianceTeamMembers === 0
-                    ? "All tracked compliance team records are complete"
-                    : "Members still need training completion"}
-                </div>
-              </div>
-
-              <div className="rounded-xl border border-slate-200 px-4 py-4">
-                <div className="text-xs uppercase tracking-wide text-slate-500">
-                  Personnel Training
-                </div>
-                <div className="mt-2 text-2xl font-bold text-slate-900">
-                  {incompletePersonnelTraining === 0 ? "Ready" : incompletePersonnelTraining}
-                </div>
-                <div className="mt-1 text-slate-500">
-                  {incompletePersonnelTraining === 0
-                    ? "All personnel training marked complete"
-                    : "Personnel training still incomplete"}
-                </div>
-              </div>
-
-              <div className="rounded-xl border border-slate-200 px-4 py-4">
-                <div className="text-xs uppercase tracking-wide text-slate-500">
-                  RPS Screening
-                </div>
-                <div className="mt-2 text-2xl font-bold text-slate-900">
-                  {incompletePersonnelRps === 0 ? "Ready" : incompletePersonnelRps}
-                </div>
-                <div className="mt-1 text-slate-500">
-                  {incompletePersonnelRps === 0
-                    ? "Personnel screening coverage complete"
-                    : "RPS screening still open"}
-                </div>
-              </div>
-
-              <div className="rounded-xl border border-slate-200 px-4 py-4">
-                <div className="text-xs uppercase tracking-wide text-slate-500">
-                  Citizenship Verification
-                </div>
-                <div className="mt-2 text-2xl font-bold text-slate-900">
-                  {incompletePersonnelCitizenship === 0 ? "Ready" : incompletePersonnelCitizenship}
-                </div>
-                <div className="mt-1 text-slate-500">
-                  {incompletePersonnelCitizenship === 0
-                    ? "Citizenship reviews complete"
-                    : "Citizenship review items remain"}
-                </div>
-              </div>
-
-              <div className="rounded-xl border border-slate-200 px-4 py-4 md:col-span-2">
-                <div className="text-xs uppercase tracking-wide text-slate-500">
-                  Secure Machine Verification
-                </div>
-                <div className="mt-2 text-2xl font-bold text-slate-900">
-                  {incompleteSecureMachines === 0 ? "Ready" : incompleteSecureMachines}
-                </div>
-                <div className="mt-1 text-slate-500">
-                  {incompleteSecureMachines === 0
-                    ? "All tracked personnel have verified secure machine assignments"
-                    : "Some personnel still need verified machine coverage"}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
-          <h2 className="text-xl font-semibold text-slate-900">
-            Edit CMMC Profile
-          </h2>
-          <p className="text-sm text-slate-600 mt-1 mb-6">
-            Capture the organization-level CMMC program state here.
-          </p>
-
-          <form action={saveCmmcProfile} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-900 mb-2">
-                Enclave Name
-              </label>
-              <input
-                type="text"
-                name="enclave_name"
-                defaultValue={profile?.enclave_name || ""}
-                className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
-                placeholder="FTRI CUI Enclave"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-slate-900 mb-2">
-                CMMC Level Target
-              </label>
-              <select
-                name="cmmc_level_target"
-                defaultValue={profile?.cmmc_level_target || "Level 2"}
-                className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
-              >
-                <option value="Level 1">Level 1</option>
-                <option value="Level 2">Level 2</option>
-                <option value="Level 3">Level 3</option>
-              </select>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-900 mb-2">
-                  SPRS Score
-                </label>
-                <input
-                  type="number"
-                  name="sprs_score"
-                  defaultValue={profile?.sprs_score ?? ""}
-                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
-                  placeholder="110"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-slate-900 mb-2">
-                  SPRS Updated
-                </label>
-                <input
-                  type="date"
-                  name="sprs_last_updated"
-                  defaultValue={profile?.sprs_last_updated || ""}
-                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-slate-900 mb-2">
-                Assessment Status
-              </label>
-              <select
-                name="assessment_status"
-                defaultValue={profile?.assessment_status || "In Progress"}
-                className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
-              >
-                <option value="Draft">Draft</option>
-                <option value="In Progress">In Progress</option>
-                <option value="Pending">Pending</option>
-                <option value="Complete">Complete</option>
-              </select>
-            </div>
-
-            {[
-              ["ssp_status", "SSP Status"],
-              ["poam_status", "POA&M Status"],
-              ["incident_response_status", "Incident Response Status"],
-              ["access_control_status", "Access Control Status"],
-              ["audit_logging_status", "Audit Logging Status"],
-              ["media_protection_status", "Media Protection Status"],
-              ["training_program_status", "Training Program Status"],
-              ["vendor_management_status", "Vendor Management Status"],
-              ["scoping_status", "Scoping Status"],
-            ].map(([field, label]) => (
-              <div key={field}>
-                <label className="block text-sm font-medium text-slate-900 mb-2">
-                  {label}
-                </label>
-                <select
-                  name={field}
-                  defaultValue={(profile as any)?.[field] || "Draft"}
-                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
-                >
-                  <option value="Draft">Draft</option>
-                  <option value="In Progress">In Progress</option>
-                  <option value="Pending">Pending</option>
-                  <option value="Complete">Complete</option>
-                  <option value="Approved">Approved</option>
-                </select>
-              </div>
-            ))}
-
-            <div>
-              <label className="block text-sm font-medium text-slate-900 mb-2">
-                Notes
-              </label>
-              <textarea
-                name="notes"
-                rows={5}
-                defaultValue={profile?.notes || ""}
-                className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
-                placeholder="Assessment notes, enclave scoping notes, upcoming milestones, open issues, etc."
-              />
-            </div>
-
-            <button
-              type="submit"
-              className="inline-flex w-full items-center justify-center rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700 transition"
+            <Link
+              href="/cmmc-compliance"
+              className="mt-4 inline-flex text-sm font-medium text-blue-600 hover:text-blue-700"
             >
-              Save CMMC Profile
-            </button>
-          </form>
+              View all activity →
+            </Link>
+          </div>
         </div>
       </div>
     </div>
