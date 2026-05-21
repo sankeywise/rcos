@@ -11,13 +11,13 @@ const mainNav = [
 
 const complianceNav = [
   { label: "CMMC Controls", href: "/cmmc-compliance" },
-  { label: "Evidence Gaps", href: "/cmmc-compliance/evidence-gaps" },
+  { label: "Policies", href: "/cmmc-compliance/policies" },
   { label: "SPRS / SSP / POA&M", href: "/cmmc-compliance/sprs-ssp-poam" },
-  { label: "Documents", href: "/cmmc-compliance/documents" },
   { label: "Reports", href: "/cmmc-compliance/reports" },
 ];
 
 const bottomNav = [
+  { label: "Incident Reporting", href: "/incident-reporting" },
   { label: "Audit Mode", href: "/audit-mode" },
   { label: "Compliance Team", href: "/compliance-team" },
   { label: "Manage Users", href: "/users" },
