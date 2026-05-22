@@ -59,7 +59,11 @@ function normalizeStatus(value?: string | null) {
 function getBadgeClass(value?: string | null) {
   const normalized = normalizeStatus(value);
 
-  if (["complete", "completed", "approved", "cleared", "closed", "final"].includes(normalized)) {
+  if (
+    ["complete", "completed", "approved", "cleared", "closed", "final"].includes(
+      normalized
+    )
+  ) {
     return "bg-green-100 text-green-700";
   }
 
@@ -76,8 +80,10 @@ function getBadgeClass(value?: string | null) {
 
 function formatDate(value?: string | null) {
   if (!value) return "—";
+
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
+
   return date.toLocaleDateString();
 }
 
@@ -144,11 +150,18 @@ export default async function ProjectIntakePage() {
   const projects: ProjectRow[] = (projectsResult.data ?? []) as ProjectRow[];
   const reviews: IntakeReview[] = (reviewsResult.data ?? []) as IntakeReview[];
 
-  const draftReviews = reviews.filter((review) => normalizeStatus(review.review_status) === "draft");
-  const inReview = reviews.filter((review) =>
-    ["pending", "in review", "requires review"].includes(normalizeStatus(review.review_status))
+  const draftReviews = reviews.filter(
+    (review) => normalizeStatus(review.review_status) === "draft"
   );
+
+  const inReview = reviews.filter((review) =>
+    ["pending", "in review", "requires review"].includes(
+      normalizeStatus(review.review_status)
+    )
+  );
+
   const highRiskReviews = reviews.filter((review) => riskLevel(review) === "High Risk");
+
   const finalReviews = reviews.filter((review) =>
     ["complete", "completed", "approved", "cleared", "final"].includes(
       normalizeStatus(review.review_status)
@@ -189,7 +202,14 @@ export default async function ProjectIntakePage() {
     const involvesItar = checkboxValue(formData, "involves_itar");
     const involvesEar = checkboxValue(formData, "involves_ear");
     const involvesNoforn = checkboxValue(formData, "involves_noforn");
-    const involvesForeignNationals = checkboxValue(formData, "involves_foreign_nationals");
+    const involvesForeignNationals = checkboxValue(
+      formData,
+      "involves_foreign_nationals"
+    );
+    const involvesInternationalCollaboration = checkboxValue(
+      formData,
+      "involves_international_collaboration"
+    );
     const involvesControlledTechnicalData = checkboxValue(
       formData,
       "involves_controlled_technical_data"
@@ -205,7 +225,7 @@ export default async function ProjectIntakePage() {
     const requiresRps =
       checkboxValue(formData, "requires_rps") ||
       involvesForeignNationals ||
-      checkboxValue(formData, "involves_international_collaboration");
+      involvesInternationalCollaboration;
 
     const requiresCmmcReview =
       checkboxValue(formData, "requires_cmmc_review") ||
@@ -256,65 +276,76 @@ export default async function ProjectIntakePage() {
         ? "Route for compliance review and confirm required safeguards before project authorization."
         : "Low-risk intake based on current answers; retain review record and monitor for changes.";
 
-    const { error } = await supabase.from("project_intake_reviews").insert({
-      organization_id: membership.organization_id,
-      project_id: String(formData.get("project_id") || "").trim()
-        ? Number(formData.get("project_id"))
-        : null,
-      project_title: projectTitle,
-      sponsor: String(formData.get("sponsor") || "").trim() || null,
-      principal_investigator:
-        String(formData.get("principal_investigator") || "").trim() || null,
-      department: String(formData.get("department") || "").trim() || null,
-      review_status: String(formData.get("review_status") || "Draft").trim(),
-      review_owner: String(formData.get("review_owner") || "").trim() || null,
-      review_date: String(formData.get("review_date") || "").trim() || null,
+    const { data, error } = await supabase
+      .from("project_intake_reviews")
+      .insert({
+        organization_id: membership.organization_id,
+        project_id: String(formData.get("project_id") || "").trim()
+          ? Number(formData.get("project_id"))
+          : null,
 
-      involves_dod: checkboxValue(formData, "involves_dod"),
-      involves_federal_sponsor: checkboxValue(formData, "involves_federal_sponsor"),
-      involves_cui: involvesCui,
-      involves_export_control: checkboxValue(formData, "involves_export_control") || involvesItar || involvesEar,
-      involves_itar: involvesItar,
-      involves_ear: involvesEar,
-      involves_noforn: involvesNoforn,
-      involves_foreign_nationals: involvesForeignNationals,
-      involves_international_collaboration: checkboxValue(
-        formData,
-        "involves_international_collaboration"
-      ),
-      involves_controlled_technical_data: involvesControlledTechnicalData,
-      involves_secure_enclave: involvesSecureEnclave,
+        project_title: projectTitle,
+        sponsor: String(formData.get("sponsor") || "").trim() || null,
+        principal_investigator:
+          String(formData.get("principal_investigator") || "").trim() || null,
+        department: String(formData.get("department") || "").trim() || null,
 
-      requires_tcp: requiresTcp,
-      requires_rps: requiresRps,
-      requires_cmmc_review: requiresCmmcReview,
-      requires_secure_machine_access: requiresSecureMachineAccess,
-      requires_fso_review: requiresFsoReview,
-      requires_iso_review: requiresIsoReview,
-      requires_eco_review: requiresEcoReview,
+        review_status: String(formData.get("review_status") || "Draft").trim(),
+        review_owner: String(formData.get("review_owner") || "").trim() || null,
+        review_date: String(formData.get("review_date") || "").trim() || null,
 
-      cui_category: String(formData.get("cui_category") || "").trim() || null,
-      export_control_summary:
-        String(formData.get("export_control_summary") || "").trim() || null,
-      data_handling_summary:
-        String(formData.get("data_handling_summary") || "").trim() || null,
-      foreign_national_summary:
-        String(formData.get("foreign_national_summary") || "").trim() || null,
-      secure_environment_summary:
-        String(formData.get("secure_environment_summary") || "").trim() || null,
-      risk_summary:
-        String(formData.get("risk_summary") || "").trim() ||
-        `Automatic intake risk: ${automaticRisk}`,
-      recommended_action:
-        String(formData.get("recommended_action") || "").trim() || recommendedAction,
-      final_determination:
-        String(formData.get("final_determination") || "").trim() || automaticRisk,
-      determination_notes:
-        String(formData.get("determination_notes") || "").trim() || null,
+        involves_dod: checkboxValue(formData, "involves_dod"),
+        involves_federal_sponsor: checkboxValue(
+          formData,
+          "involves_federal_sponsor"
+        ),
+        involves_cui: involvesCui,
+        involves_export_control:
+          checkboxValue(formData, "involves_export_control") || involvesItar || involvesEar,
+        involves_itar: involvesItar,
+        involves_ear: involvesEar,
+        involves_noforn: involvesNoforn,
+        involves_foreign_nationals: involvesForeignNationals,
+        involves_international_collaboration: involvesInternationalCollaboration,
+        involves_controlled_technical_data: involvesControlledTechnicalData,
+        involves_secure_enclave: involvesSecureEnclave,
 
-      created_by: user.id,
-      updated_at: new Date().toISOString(),
-    });
+        requires_tcp: requiresTcp,
+        requires_rps: requiresRps,
+        requires_cmmc_review: requiresCmmcReview,
+        requires_secure_machine_access: requiresSecureMachineAccess,
+        requires_fso_review: requiresFsoReview,
+        requires_iso_review: requiresIsoReview,
+        requires_eco_review: requiresEcoReview,
+
+        cui_category: String(formData.get("cui_category") || "").trim() || null,
+        export_control_summary:
+          String(formData.get("export_control_summary") || "").trim() || null,
+        data_handling_summary:
+          String(formData.get("data_handling_summary") || "").trim() || null,
+        foreign_national_summary:
+          String(formData.get("foreign_national_summary") || "").trim() || null,
+        secure_environment_summary:
+          String(formData.get("secure_environment_summary") || "").trim() || null,
+
+        risk_summary:
+          String(formData.get("risk_summary") || "").trim() ||
+          `Automatic intake risk: ${automaticRisk}`,
+
+        recommended_action:
+          String(formData.get("recommended_action") || "").trim() || recommendedAction,
+
+        final_determination:
+          String(formData.get("final_determination") || "").trim() || automaticRisk,
+
+        determination_notes:
+          String(formData.get("determination_notes") || "").trim() || null,
+
+        created_by: user.id,
+        updated_at: new Date().toISOString(),
+      })
+      .select("id")
+      .single();
 
     if (error) {
       throw new Error(error.message);
@@ -323,6 +354,12 @@ export default async function ProjectIntakePage() {
     revalidatePath("/project-intake");
     revalidatePath("/");
     revalidatePath("/audit-mode");
+
+    if (data?.id) {
+      redirect(`/project-intake/${data.id}`);
+    }
+
+    redirect("/project-intake");
   }
 
   return (
@@ -331,7 +368,8 @@ export default async function ProjectIntakePage() {
         <div>
           <h1 className="text-3xl font-bold text-slate-900">Project Intake</h1>
           <p className="mt-1 text-slate-600">
-            Classification workflow for CUI, ITAR, EAR, NOFORN, foreign national access, secure enclave, and CMMC applicability.
+            Classification workflow for CUI, ITAR, EAR, NOFORN, foreign national
+            access, secure enclave, and CMMC applicability.
           </p>
         </div>
 
@@ -346,7 +384,9 @@ export default async function ProjectIntakePage() {
       <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="text-sm text-slate-500">Total Reviews</div>
-          <div className="mt-2 text-4xl font-bold text-slate-900">{reviews.length}</div>
+          <div className="mt-2 text-4xl font-bold text-slate-900">
+            {reviews.length}
+          </div>
         </div>
 
         <div className="rounded-2xl border border-yellow-200 bg-white p-6 shadow-sm">
@@ -377,12 +417,16 @@ export default async function ProjectIntakePage() {
             New Project Intake Review
           </h2>
           <p className="mt-1 text-sm text-slate-500">
-            Use metadata and summaries only. Do not enter controlled technical details, CUI contents, enclave diagrams, vulnerability data, or sensitive configuration information.
+            Use metadata and summaries only. Do not enter controlled technical
+            details, CUI contents, enclave diagrams, vulnerability data, or sensitive
+            configuration information.
           </p>
 
           <form action={createIntakeReview} className="mt-6 space-y-7">
             <section>
-              <h3 className="text-lg font-semibold text-slate-900">Project Information</h3>
+              <h3 className="text-lg font-semibold text-slate-900">
+                Project Information
+              </h3>
 
               <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
                 <div>
@@ -465,7 +509,9 @@ export default async function ProjectIntakePage() {
             </section>
 
             <section>
-              <h3 className="text-lg font-semibold text-slate-900">Classification Questions</h3>
+              <h3 className="text-lg font-semibold text-slate-900">
+                Classification Questions
+              </h3>
 
               <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
                 {[
@@ -477,8 +523,14 @@ export default async function ProjectIntakePage() {
                   ["involves_ear", "Does this involve EAR?"],
                   ["involves_noforn", "Does this involve NOFORN restrictions?"],
                   ["involves_foreign_nationals", "Are foreign nationals involved?"],
-                  ["involves_international_collaboration", "International collaboration involved?"],
-                  ["involves_controlled_technical_data", "Controlled technical data involved?"],
+                  [
+                    "involves_international_collaboration",
+                    "International collaboration involved?",
+                  ],
+                  [
+                    "involves_controlled_technical_data",
+                    "Controlled technical data involved?",
+                  ],
                   ["involves_secure_enclave", "Secure enclave required or expected?"],
                   ["requires_tcp", "Technology Control Plan required?"],
                   ["requires_rps", "Restricted party screening required?"],
@@ -500,7 +552,9 @@ export default async function ProjectIntakePage() {
             </section>
 
             <section>
-              <h3 className="text-lg font-semibold text-slate-900">Review Summaries</h3>
+              <h3 className="text-lg font-semibold text-slate-900">
+                Review Summaries
+              </h3>
 
               <div className="mt-4 space-y-4">
                 <input
@@ -584,7 +638,9 @@ export default async function ProjectIntakePage() {
         </div>
 
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-          <h2 className="text-xl font-semibold text-slate-900">Intake Review Register</h2>
+          <h2 className="text-xl font-semibold text-slate-900">
+            Intake Review Register
+          </h2>
           <p className="mt-1 text-sm text-slate-500">
             Classification and routing history for controlled research review.
           </p>
@@ -599,10 +655,7 @@ export default async function ProjectIntakePage() {
                 const risk = riskLevel(review);
 
                 return (
-                  <div
-                    key={review.id}
-                    className="rounded-xl border border-slate-200 p-4"
-                  >
+                  <div key={review.id} className="rounded-xl border border-slate-200 p-4">
                     <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                       <div>
                         <div className="font-semibold text-slate-900">
@@ -703,6 +756,13 @@ export default async function ProjectIntakePage() {
                         FSO Review: {review.requires_fso_review ? "Yes" : "No"}
                       </div>
                     </div>
+
+                    <Link
+                      href={`/project-intake/${review.id}`}
+                      className="mt-4 inline-flex rounded-lg bg-blue-600 px-3 py-2 text-xs font-medium text-white hover:bg-blue-700"
+                    >
+                      View / Print Determination
+                    </Link>
                   </div>
                 );
               })}
@@ -712,8 +772,9 @@ export default async function ProjectIntakePage() {
       </div>
 
       <div className="rounded-2xl border border-amber-200 bg-amber-50 p-6 text-sm text-amber-900">
-        Project Intake is intended to capture routing decisions, risk indicators, and review metadata.
-        Do not enter controlled technical data, CUI contents, enclave diagrams, vulnerabilities, or sensitive configuration details.
+        Project Intake is intended to capture routing decisions, risk indicators,
+        and review metadata. Do not enter controlled technical data, CUI contents,
+        enclave diagrams, vulnerabilities, or sensitive configuration details.
       </div>
     </div>
   );
