@@ -45,6 +45,33 @@ type ProjectComplianceItem = {
   sensitivity_level: string | null;
 };
 
+type ProjectIntakeReview = {
+  id: number;
+  project_id: number | null;
+  project_title: string | null;
+  sponsor: string | null;
+  principal_investigator: string | null;
+  review_status: string | null;
+  review_owner: string | null;
+  review_date: string | null;
+  involves_cui: boolean | null;
+  involves_itar: boolean | null;
+  involves_ear: boolean | null;
+  involves_noforn: boolean | null;
+  involves_foreign_nationals: boolean | null;
+  involves_controlled_technical_data: boolean | null;
+  involves_secure_enclave: boolean | null;
+  requires_tcp: boolean | null;
+  requires_rps: boolean | null;
+  requires_cmmc_review: boolean | null;
+  requires_secure_machine_access: boolean | null;
+  requires_fso_review: boolean | null;
+  requires_iso_review: boolean | null;
+  requires_eco_review: boolean | null;
+  final_determination: string | null;
+  created_at: string | null;
+};
+
 type PersonnelRow = {
   id: number;
   project_id: number | null;
@@ -117,6 +144,7 @@ function isCompleteStatus(value?: string | null) {
     "resolved",
     "validated",
     "not applicable",
+    "final",
   ].includes(normalizeStatus(value));
 }
 
@@ -135,10 +163,12 @@ function getBadgeClass(value?: string | null) {
       "open",
       "partial",
       "in review",
+      "requires review",
       "pending validation",
       "medium",
       "referenced",
       "provided",
+      "moderate risk",
     ].includes(normalized)
   ) {
     return "bg-yellow-100 text-yellow-700";
@@ -154,6 +184,9 @@ function getBadgeClass(value?: string | null) {
       "critical",
       "not started",
       "not provided",
+      "high risk",
+      "restricted",
+      "not approved",
     ].includes(normalized)
   ) {
     return "bg-red-100 text-red-700";
@@ -215,15 +248,31 @@ function getProjectName(project: ProjectRow, index: number) {
     return project.project_name;
   }
 
-  const fallback = [
-    "Quantum Navigation",
-    "Secure Drone Comms",
-    "AI Radar System",
-    "Autonomy Research",
-    "Protected Data Project",
-  ];
+  return `Unnamed Project ${project.id || index + 1}`;
+}
 
-  return fallback[index] || `Project ${project.id}`;
+function getIntakeRiskLevel(review: ProjectIntakeReview) {
+  const flags = [
+    review.involves_cui,
+    review.involves_itar,
+    review.involves_ear,
+    review.involves_noforn,
+    review.involves_foreign_nationals,
+    review.involves_controlled_technical_data,
+    review.involves_secure_enclave,
+    review.requires_tcp,
+    review.requires_cmmc_review,
+  ].filter(Boolean).length;
+
+  if (flags >= 5) return "High Risk";
+  if (flags >= 2) return "Moderate Risk";
+  return "Low Risk";
+}
+
+function isIntakeFinal(review: ProjectIntakeReview) {
+  return ["final", "approved", "complete", "completed", "cleared"].includes(
+    normalizeStatus(review.review_status)
+  );
 }
 
 export default async function AuditModePage() {
@@ -274,6 +323,12 @@ export default async function AuditModePage() {
     .order("project_id", { ascending: true })
     .order("id", { ascending: true });
 
+  const projectIntakeReviewsResult = await supabase
+    .from("project_intake_reviews")
+    .select("id, project_id, project_title, sponsor, principal_investigator, review_status, review_owner, review_date, involves_cui, involves_itar, involves_ear, involves_noforn, involves_foreign_nationals, involves_controlled_technical_data, involves_secure_enclave, requires_tcp, requires_rps, requires_cmmc_review, requires_secure_machine_access, requires_fso_review, requires_iso_review, requires_eco_review, final_determination, created_at")
+    .eq("organization_id", orgId)
+    .order("created_at", { ascending: false });
+
   const personnelResult = await supabase
     .from("personnel")
     .select("id, project_id, name, full_name, training_complete, citizenship_status, rps_screening_status, secure_machine_name, secure_machine_status")
@@ -303,6 +358,8 @@ export default async function AuditModePage() {
   const projects: ProjectRow[] = (projectsResult.data ?? []) as ProjectRow[];
   const projectComplianceItems: ProjectComplianceItem[] =
     (projectComplianceItemsResult.data ?? []) as ProjectComplianceItem[];
+  const projectIntakeReviews: ProjectIntakeReview[] =
+    (projectIntakeReviewsResult.data ?? []) as ProjectIntakeReview[];
   const personnel: PersonnelRow[] = (personnelResult.data ?? []) as PersonnelRow[];
   const incidents: IncidentReport[] = (incidentsResult.data ?? []) as IncidentReport[];
   const correctiveActions: CorrectiveAction[] = (actionsResult.data ?? []) as CorrectiveAction[];
@@ -328,6 +385,48 @@ export default async function AuditModePage() {
       !["provided", "referenced", "verified", "not applicable"].includes(
         normalizeStatus(item.evidence_status)
       )
+  );
+
+  const draftOrInReviewIntakes = projectIntakeReviews.filter((review) =>
+    ["draft", "pending", "in review", "requires review"].includes(
+      normalizeStatus(review.review_status)
+    )
+  );
+
+  const finalizedIntakes = projectIntakeReviews.filter((review) =>
+    isIntakeFinal(review)
+  );
+
+  const highRiskIntakes = projectIntakeReviews.filter(
+    (review) => getIntakeRiskLevel(review) === "High Risk"
+  );
+
+  const moderateRiskIntakes = projectIntakeReviews.filter(
+    (review) => getIntakeRiskLevel(review) === "Moderate Risk"
+  );
+
+  const intakesRequiringEco = projectIntakeReviews.filter(
+    (review) => review.requires_eco_review && !isIntakeFinal(review)
+  );
+
+  const intakesRequiringIso = projectIntakeReviews.filter(
+    (review) => review.requires_iso_review && !isIntakeFinal(review)
+  );
+
+  const intakesRequiringFso = projectIntakeReviews.filter(
+    (review) => review.requires_fso_review && !isIntakeFinal(review)
+  );
+
+  const intakesRequiringCmmc = projectIntakeReviews.filter(
+    (review) => review.requires_cmmc_review && !isIntakeFinal(review)
+  );
+
+  const intakesRequiringTcp = projectIntakeReviews.filter(
+    (review) => review.requires_tcp && !isIntakeFinal(review)
+  );
+
+  const intakesRequiringSecureMachine = projectIntakeReviews.filter(
+    (review) => review.requires_secure_machine_access && !isIntakeFinal(review)
   );
 
   const personnelTrainingComplete = personnel.filter((person) => person.training_complete);
@@ -393,6 +492,11 @@ export default async function AuditModePage() {
     completeControlAreas.length === controlStatusCards.length,
     documents.length > 0 && openDocuments.length === 0,
     projects.length > 0,
+    projectIntakeReviews.length > 0,
+    highRiskIntakes.length === 0,
+    intakesRequiringEco.length === 0,
+    intakesRequiringIso.length === 0,
+    intakesRequiringFso.length === 0,
     projectComplianceItems.length > 0,
     projectItemsOverdue.length === 0,
     projectEvidenceMissing.length === 0,
@@ -433,6 +537,21 @@ export default async function AuditModePage() {
     ...(openDocuments.length > 0
       ? [`${openDocuments.length} policy/document item(s) are not complete`]
       : []),
+    ...(highRiskIntakes.length > 0
+      ? [`${highRiskIntakes.length} high-risk project intake review(s) require routing`]
+      : []),
+    ...(draftOrInReviewIntakes.length > 0
+      ? [`${draftOrInReviewIntakes.length} project intake review(s) are still draft or in review`]
+      : []),
+    ...(intakesRequiringEco.length > 0
+      ? [`${intakesRequiringEco.length} intake review(s) require ECO review`]
+      : []),
+    ...(intakesRequiringIso.length > 0
+      ? [`${intakesRequiringIso.length} intake review(s) require ISO review`]
+      : []),
+    ...(intakesRequiringFso.length > 0
+      ? [`${intakesRequiringFso.length} intake review(s) require FSO review`]
+      : []),
     ...(projectItemsOpen.length > 0
       ? [`${projectItemsOpen.length} project compliance item(s) are open`]
       : []),
@@ -471,7 +590,7 @@ export default async function AuditModePage() {
         <div>
           <h1 className="text-3xl font-bold text-slate-900">Audit Mode</h1>
           <p className="mt-1 text-slate-600">
-            Assessor-style view of readiness, projects, project compliance, policies, incidents, personnel, and corrective actions.
+            Assessor-style view of readiness, project intake, project compliance, policies, incidents, personnel, and corrective actions.
           </p>
         </div>
 
@@ -490,7 +609,7 @@ export default async function AuditModePage() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-6">
-        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm xl:col-span-1">
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="text-sm font-medium text-slate-500">Audit Readiness</div>
           <div className="mt-3 text-5xl font-bold text-blue-600">{readinessScore}%</div>
           <div className="mt-2 text-sm text-slate-500">
@@ -499,9 +618,15 @@ export default async function AuditModePage() {
         </div>
 
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="text-sm font-medium text-slate-500">Projects</div>
-          <div className="mt-3 text-5xl font-bold text-slate-900">{projects.length}</div>
-          <div className="mt-2 text-sm text-slate-500">Tracked projects</div>
+          <div className="text-sm font-medium text-slate-500">Intake Reviews</div>
+          <div className="mt-3 text-5xl font-bold text-slate-900">{projectIntakeReviews.length}</div>
+          <div className="mt-2 text-sm text-slate-500">{finalizedIntakes.length} finalized</div>
+        </div>
+
+        <div className="rounded-2xl border border-red-200 bg-white p-6 shadow-sm">
+          <div className="text-sm font-medium text-slate-500">High-Risk Intake</div>
+          <div className="mt-3 text-5xl font-bold text-red-600">{highRiskIntakes.length}</div>
+          <div className="mt-2 text-sm text-slate-500">Requires routing</div>
         </div>
 
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
@@ -514,12 +639,6 @@ export default async function AuditModePage() {
           <div className="text-sm font-medium text-slate-500">Audit Blockers</div>
           <div className="mt-3 text-5xl font-bold text-red-600">{auditBlockers.length}</div>
           <div className="mt-2 text-sm text-slate-500">Requires attention</div>
-        </div>
-
-        <div className="rounded-2xl border border-amber-200 bg-white p-6 shadow-sm">
-          <div className="text-sm font-medium text-slate-500">Evidence Refs Missing</div>
-          <div className="mt-3 text-5xl font-bold text-amber-600">{projectEvidenceMissing.length}</div>
-          <div className="mt-2 text-sm text-slate-500">Project-level references</div>
         </div>
 
         <div className="rounded-2xl border border-amber-200 bg-white p-6 shadow-sm">
@@ -602,6 +721,144 @@ export default async function AuditModePage() {
           >
             Manage SPRS / SSP / POA&M
           </Link>
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h2 className="text-xl font-semibold text-slate-900">Project Intake / Classification Review</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Audit view of intake determinations, routing requirements, and controlled research flags.
+            </p>
+          </div>
+
+          <Link
+            href="/project-intake"
+            className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white"
+          >
+            Open Intake
+          </Link>
+        </div>
+
+        <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-3 xl:grid-cols-6">
+          <div className="rounded-xl border border-slate-200 p-4">
+            <div className="text-sm text-slate-500">Total Reviews</div>
+            <div className="mt-2 text-3xl font-bold text-slate-900">{projectIntakeReviews.length}</div>
+          </div>
+
+          <div className="rounded-xl border border-green-200 p-4">
+            <div className="text-sm text-slate-500">Finalized</div>
+            <div className="mt-2 text-3xl font-bold text-green-600">{finalizedIntakes.length}</div>
+          </div>
+
+          <div className="rounded-xl border border-yellow-200 p-4">
+            <div className="text-sm text-slate-500">Draft / In Review</div>
+            <div className="mt-2 text-3xl font-bold text-yellow-600">{draftOrInReviewIntakes.length}</div>
+          </div>
+
+          <div className="rounded-xl border border-red-200 p-4">
+            <div className="text-sm text-slate-500">High Risk</div>
+            <div className="mt-2 text-3xl font-bold text-red-600">{highRiskIntakes.length}</div>
+          </div>
+
+          <div className="rounded-xl border border-amber-200 p-4">
+            <div className="text-sm text-slate-500">CMMC Review</div>
+            <div className="mt-2 text-3xl font-bold text-amber-600">{intakesRequiringCmmc.length}</div>
+          </div>
+
+          <div className="rounded-xl border border-amber-200 p-4">
+            <div className="text-sm text-slate-500">TCP Required</div>
+            <div className="mt-2 text-3xl font-bold text-amber-600">{intakesRequiringTcp.length}</div>
+          </div>
+        </div>
+
+        <div className="mt-5 overflow-hidden rounded-xl border border-slate-200">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+              <tr>
+                <th className="px-4 py-3">Review</th>
+                <th className="px-4 py-3">Risk</th>
+                <th className="px-4 py-3">Routing</th>
+                <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3">Determination</th>
+                <th className="px-4 py-3">Report</th>
+              </tr>
+            </thead>
+
+            <tbody className="divide-y divide-slate-100">
+              {projectIntakeReviews.slice(0, 10).map((review) => {
+                const risk = getIntakeRiskLevel(review);
+
+                return (
+                  <tr key={review.id} className="hover:bg-slate-50">
+                    <td className="px-4 py-4">
+                      <div className="font-medium text-slate-900">
+                        {review.project_title || "Untitled Intake"}
+                      </div>
+                      <div className="mt-1 text-xs text-slate-500">
+                        {review.sponsor || "No sponsor"} • PI {review.principal_investigator || "—"}
+                      </div>
+                    </td>
+
+                    <td className="px-4 py-4">
+                      <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${getBadgeClass(risk)}`}>
+                        {risk}
+                      </span>
+                    </td>
+
+                    <td className="px-4 py-4">
+                      <div className="flex flex-wrap gap-1">
+                        {review.requires_eco_review && (
+                          <span className="rounded-full bg-blue-100 px-2 py-1 text-xs text-blue-700">
+                            ECO
+                          </span>
+                        )}
+                        {review.requires_iso_review && (
+                          <span className="rounded-full bg-purple-100 px-2 py-1 text-xs text-purple-700">
+                            ISO
+                          </span>
+                        )}
+                        {review.requires_fso_review && (
+                          <span className="rounded-full bg-slate-900 px-2 py-1 text-xs text-white">
+                            FSO
+                          </span>
+                        )}
+                        {review.requires_cmmc_review && (
+                          <span className="rounded-full bg-green-100 px-2 py-1 text-xs text-green-700">
+                            CMMC
+                          </span>
+                        )}
+                      </div>
+                    </td>
+
+                    <td className="px-4 py-4">
+                      <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${getBadgeClass(review.review_status)}`}>
+                        {review.review_status || "Draft"}
+                      </span>
+                    </td>
+
+                    <td className="px-4 py-4 text-slate-700">
+                      {review.final_determination || "—"}
+                    </td>
+
+                    <td className="px-4 py-4">
+                      <Link
+                        href={`/project-intake/${review.id}`}
+                        className="text-sm font-medium text-blue-600 hover:text-blue-700"
+                      >
+                        Open
+                      </Link>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+
+          {projectIntakeReviews.length === 0 && (
+            <div className="p-4 text-sm text-slate-500">No project intake reviews found.</div>
+          )}
         </div>
       </div>
 
