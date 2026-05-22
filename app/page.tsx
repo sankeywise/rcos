@@ -90,6 +90,22 @@ type IncidentReportRow = {
   created_at: string | null;
 };
 
+type CorrectiveActionRow = {
+  id: number;
+  title: string | null;
+  source_type: string | null;
+  source_reference: string | null;
+  related_control: string | null;
+  related_project: string | null;
+  related_incident_id: number | null;
+  severity: string | null;
+  status: string | null;
+  owner: string | null;
+  due_date: string | null;
+  completed_date: string | null;
+  created_at: string | null;
+};
+
 type CriticalAction = {
   label: string;
   action: string;
@@ -124,22 +140,16 @@ function isCompleteStatus(value?: string | null) {
     "cleared",
     "active",
     "audit ready",
+    "closed",
+    "resolved",
+    "validated",
   ].includes(normalizeStatus(value));
 }
 
 function getBadgeClass(status?: string | null) {
   const normalized = normalizeStatus(status);
 
-  if (
-    normalized === "complete" ||
-    normalized === "completed" ||
-    normalized === "approved" ||
-    normalized === "signed" ||
-    normalized === "verified" ||
-    normalized === "cleared" ||
-    normalized === "active" ||
-    normalized === "audit ready"
-  ) {
+  if (isCompleteStatus(status)) {
     return "bg-green-100 text-green-700";
   }
 
@@ -148,7 +158,11 @@ function getBadgeClass(status?: string | null) {
     normalized === "pending" ||
     normalized === "draft" ||
     normalized === "review required" ||
-    normalized === "partial"
+    normalized === "partial" ||
+    normalized === "open" ||
+    normalized === "in review" ||
+    normalized === "pending validation" ||
+    normalized === "medium"
   ) {
     return "bg-yellow-100 text-yellow-700";
   }
@@ -269,6 +283,24 @@ function getProjectDisplayName(project: ProjectRow, index: number) {
   ];
 
   return fallbackNames[index] || `Project ${project.id}`;
+}
+
+function isCorrectiveActionClosed(action: CorrectiveActionRow) {
+  return ["closed", "complete", "completed", "resolved", "validated"].includes(
+    normalizeStatus(action.status)
+  );
+}
+
+function isCorrectiveActionOverdue(action: CorrectiveActionRow) {
+  if (!action.due_date || isCorrectiveActionClosed(action)) return false;
+
+  const dueDate = new Date(action.due_date);
+  const today = new Date();
+
+  dueDate.setHours(0, 0, 0, 0);
+  today.setHours(0, 0, 0, 0);
+
+  return dueDate < today;
 }
 
 export default async function DashboardPage() {
@@ -396,6 +428,26 @@ export default async function DashboardPage() {
     .eq("organization_id", orgId)
     .order("created_at", { ascending: false });
 
+  const correctiveActionsResult = await supabase
+    .from("corrective_actions")
+    .select(`
+      id,
+      title,
+      source_type,
+      source_reference,
+      related_control,
+      related_project,
+      related_incident_id,
+      severity,
+      status,
+      owner,
+      due_date,
+      completed_date,
+      created_at
+    `)
+    .eq("organization_id", orgId)
+    .order("created_at", { ascending: false });
+
   const projects: ProjectRow[] = (projectsResult.data ?? []) as ProjectRow[];
   const artifacts: ArtifactRow[] = (artifactsResult.data ?? []) as ArtifactRow[];
   const personnel: PersonnelRow[] = (personnelResult.data ?? []) as PersonnelRow[];
@@ -407,6 +459,8 @@ export default async function DashboardPage() {
     (cmmcProfileResult.data as CmmcProfileRow | null) ?? null;
   const incidentReports: IncidentReportRow[] =
     (incidentReportsResult.data ?? []) as IncidentReportRow[];
+  const correctiveActions: CorrectiveActionRow[] =
+    (correctiveActionsResult.data ?? []) as CorrectiveActionRow[];
 
   const complianceTeamTrainingMap: Record<string, ComplianceTeamTrainingRow[]> = {};
   complianceTeamTraining.forEach((row) => {
@@ -418,7 +472,6 @@ export default async function DashboardPage() {
   });
 
   const pendingProjectDocs = artifacts.filter((doc) => !isCompleteStatus(doc.status));
-
   const personnelTrainingIncomplete = personnel.filter((person) => !person.training_complete);
 
   const personnelRpsIncomplete = personnel.filter(
@@ -474,6 +527,19 @@ export default async function DashboardPage() {
       incident.involves_ear ||
       incident.involves_pii ||
       incident.cyber_related
+  );
+
+  const openCorrectiveActions = correctiveActions.filter(
+    (action) => !isCorrectiveActionClosed(action)
+  );
+  const closedCorrectiveActions = correctiveActions.filter((action) =>
+    isCorrectiveActionClosed(action)
+  );
+  const overdueCorrectiveActions = correctiveActions.filter((action) =>
+    isCorrectiveActionOverdue(action)
+  );
+  const highRiskCorrectiveActions = correctiveActions.filter((action) =>
+    ["high", "critical"].includes(normalizeStatus(action.severity))
   );
 
   const controlCards = [
@@ -579,6 +645,14 @@ export default async function DashboardPage() {
       label: "No open high-risk incidents",
       complete: highRiskIncidentReports.length === 0,
     },
+    {
+      label: "No overdue corrective actions",
+      complete: overdueCorrectiveActions.length === 0,
+    },
+    {
+      label: "No open high-risk corrective actions",
+      complete: highRiskCorrectiveActions.length === 0,
+    },
   ];
 
   const completedReadinessChecks = readinessChecks.filter((check) => check.complete).length;
@@ -619,6 +693,20 @@ export default async function DashboardPage() {
     }));
 
   const criticalActions: CriticalAction[] = [
+    ...overdueCorrectiveActions.slice(0, 2).map((action) => ({
+      label: `Resolve overdue corrective action: ${action.title || "Untitled action"}`,
+      action: "Resolve",
+      href: "/corrective-actions",
+      severity: "Critical" as const,
+      owner: action.owner || "Unassigned",
+    })),
+    ...highRiskCorrectiveActions.slice(0, 2).map((action) => ({
+      label: `Review high-risk corrective action: ${action.title || "Untitled action"}`,
+      action: "Review",
+      href: "/corrective-actions",
+      severity: "Critical" as const,
+      owner: action.owner || "Unassigned",
+    })),
     ...highRiskIncidentReports.slice(0, 2).map((incident) => ({
       label: `Review high-risk incident: ${incident.title || "Untitled incident"}`,
       action: "Review Incident",
@@ -652,6 +740,22 @@ export default async function DashboardPage() {
   ].slice(0, 5);
 
   const topRisks: RiskItem[] = [
+    ...(overdueCorrectiveActions.length > 0
+      ? [
+          {
+            label: `${overdueCorrectiveActions.length} overdue corrective action(s) require immediate attention`,
+            risk: "High Risk" as const,
+          },
+        ]
+      : []),
+    ...(highRiskCorrectiveActions.length > 0
+      ? [
+          {
+            label: `${highRiskCorrectiveActions.length} high-risk POA&M / corrective action item(s) remain open`,
+            risk: "High Risk" as const,
+          },
+        ]
+      : []),
     ...(highRiskIncidentReports.length > 0
       ? [
           {
@@ -711,6 +815,26 @@ export default async function DashboardPage() {
   ].slice(0, 5);
 
   const actionAlerts: ActionAlert[] = [
+    ...(overdueCorrectiveActions.length > 0
+      ? [
+          {
+            label: `${overdueCorrectiveActions.length} corrective action item(s) are overdue`,
+            action: "Resolve Actions",
+            href: "/corrective-actions",
+            tone: "red" as const,
+          },
+        ]
+      : []),
+    ...(openCorrectiveActions.length > 0
+      ? [
+          {
+            label: `${openCorrectiveActions.length} POA&M / corrective action item(s) remain open`,
+            action: "View Actions",
+            href: "/corrective-actions",
+            tone: "amber" as const,
+          },
+        ]
+      : []),
     ...(highRiskIncidentReports.length > 0
       ? [
           {
@@ -791,7 +915,7 @@ export default async function DashboardPage() {
           },
         ]
       : []),
-  ].slice(0, 7);
+  ].slice(0, 8);
 
   const readinessMessage =
     readinessPercent === 0
@@ -804,7 +928,7 @@ export default async function DashboardPage() {
         <div>
           <h1 className="text-3xl font-bold text-slate-900">Action Center</h1>
           <p className="mt-1 text-slate-600">
-            Immediate view of organizational readiness, critical actions, top risks, evidence gaps, and incidents.
+            Immediate view of organizational readiness, critical actions, risks, evidence gaps, incidents, and corrective actions.
           </p>
         </div>
 
@@ -873,10 +997,10 @@ export default async function DashboardPage() {
           )}
 
           <Link
-            href="/incident-reporting"
+            href="/corrective-actions"
             className="mt-4 inline-flex text-sm font-medium text-blue-600 hover:text-blue-700"
           >
-            View all critical actions →
+            View remediation actions →
           </Link>
         </div>
 
@@ -949,158 +1073,98 @@ export default async function DashboardPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-4">
-        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm xl:col-span-1">
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-5">
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="mb-4 flex items-center justify-between gap-4">
-            <h2 className="text-xl font-semibold text-slate-900">Projects Overview</h2>
-            <Link
-              href="/projects"
-              className="text-sm font-medium text-blue-600 hover:text-blue-700"
-            >
-              View All Projects
+            <h2 className="text-lg font-semibold text-slate-900">Projects</h2>
+            <Link href="/projects" className="text-sm font-medium text-blue-600">
+              View
             </Link>
           </div>
 
-          {projectReadiness.length === 0 ? (
-            <div className="text-sm text-slate-500">No project records found.</div>
-          ) : (
-            <div className="space-y-4">
-              {projectReadiness.slice(0, 5).map((project) => (
-                <div key={project.id} className="rounded-xl border border-slate-200 p-4">
-                  <div className="mb-3 flex items-center justify-between gap-3">
-                    <div>
-                      <Link
-                        href={`/projects/${project.id}`}
-                        className="font-medium text-slate-900 hover:text-blue-600"
-                      >
-                        {project.displayName}
-                      </Link>
-                      <div className="mt-1 text-xs text-slate-500">
-                        {project.sponsor || "No sponsor"} • {project.status || "Pending"}
-                      </div>
-                    </div>
+          <div className="text-4xl font-bold text-slate-900">{activeProjects.length}</div>
+          <div className="mt-1 text-sm text-slate-500">Active projects</div>
 
-                    <span
-                      className={`rounded-full px-2.5 py-1 text-xs font-medium ${getBadgeClass(
-                        project.status
-                      )}`}
-                    >
-                      {project.status || "Pending"}
-                    </span>
-                  </div>
-
-                  <div className="mb-2 flex items-center justify-between text-sm">
-                    <span className="text-slate-600">Compliance Progress</span>
-                    <span className="font-medium text-slate-900">
-                      {project.readiness.percent}%
-                    </span>
-                  </div>
-
-                  <div className="h-2 w-full overflow-hidden rounded-full bg-slate-200">
-                    <div
-                      className="h-2 rounded-full bg-blue-600"
-                      style={{ width: `${project.readiness.percent}%` }}
-                    />
-                  </div>
-
-                  <div className="mt-3 grid grid-cols-2 gap-3 text-xs text-slate-500">
-                    <div>Evidence gaps: {project.readiness.incompleteDocs}</div>
-                    <div>Personnel gaps: {project.readiness.nonCompliantPersonnel}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm xl:col-span-1">
-          <div className="mb-4 flex items-center justify-between gap-4">
-            <h2 className="text-xl font-semibold text-slate-900">Evidence Gaps</h2>
-            <Link
-              href="/cmmc-compliance/policies"
-              className="text-sm font-medium text-blue-600 hover:text-blue-700"
-            >
-              View Policies
-            </Link>
-          </div>
-
-          {evidenceGaps.length === 0 ? (
-            <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
-              All evidence is complete.
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {evidenceGaps.map((gap) => (
-                <div
-                  key={gap.id}
-                  className="rounded-xl border border-slate-200 p-3"
+          <div className="mt-4 space-y-3">
+            {projectReadiness.slice(0, 3).map((project) => (
+              <div key={project.id} className="rounded-xl border border-slate-200 p-3">
+                <Link
+                  href={`/projects/${project.id}`}
+                  className="text-sm font-medium text-slate-900 hover:text-blue-600"
                 >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="text-sm font-medium text-slate-900">
-                        {gap.title || "Missing Evidence"}
-                      </div>
-                      <div className="mt-1 text-xs text-slate-500">
-                        {gap.artifact_type || "Evidence Item"} • Updated {formatDate(gap.created_at)}
-                      </div>
-                    </div>
-
-                    <Link
-                      href={
-                        gap.project_id != null
-                          ? `/projects/${gap.project_id}`
-                          : "/cmmc-compliance"
-                      }
-                      className="shrink-0 rounded-lg bg-blue-600 px-3 py-2 text-xs font-medium text-white hover:bg-blue-700"
-                    >
-                      Upload Evidence
-                    </Link>
-                  </div>
-
-                  <div className="mt-3">
-                    <span
-                      className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${getEvidenceTone(
-                        gap.evidenceStatus
-                      )}`}
-                    >
-                      {gap.evidenceStatus}
-                    </span>
-                  </div>
+                  {project.displayName}
+                </Link>
+                <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-slate-200">
+                  <div
+                    className="h-2 rounded-full bg-blue-600"
+                    style={{ width: `${project.readiness.percent}%` }}
+                  />
                 </div>
-              ))}
-            </div>
-          )}
+                <div className="mt-1 text-xs text-slate-500">
+                  {project.readiness.percent}% ready
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
 
-        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm xl:col-span-1">
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="mb-4 flex items-center justify-between gap-4">
-            <h2 className="text-xl font-semibold text-slate-900">Personnel Compliance</h2>
-            <Link
-              href="/personnel"
-              className="text-sm font-medium text-blue-600 hover:text-blue-700"
-            >
-              Manage Personnel
+            <h2 className="text-lg font-semibold text-slate-900">Evidence</h2>
+            <Link href="/cmmc-compliance/policies" className="text-sm font-medium text-blue-600">
+              View
+            </Link>
+          </div>
+
+          <div className="text-4xl font-bold text-red-600">{evidenceGaps.length}</div>
+          <div className="mt-1 text-sm text-slate-500">Open evidence gaps</div>
+
+          <div className="mt-4 space-y-3">
+            {evidenceGaps.slice(0, 3).map((gap) => (
+              <div key={gap.id} className="rounded-xl border border-slate-200 p-3">
+                <div className="text-sm font-medium text-slate-900">
+                  {gap.title || "Missing Evidence"}
+                </div>
+                <div className="mt-1 text-xs text-slate-500">
+                  {gap.artifact_type || "Evidence Item"}
+                </div>
+                <span
+                  className={`mt-2 inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${getEvidenceTone(
+                    gap.evidenceStatus
+                  )}`}
+                >
+                  {gap.evidenceStatus}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="mb-4 flex items-center justify-between gap-4">
+            <h2 className="text-lg font-semibold text-slate-900">Personnel</h2>
+            <Link href="/personnel" className="text-sm font-medium text-blue-600">
+              View
             </Link>
           </div>
 
           <div className="space-y-4">
-            <div className="rounded-xl border border-slate-200 p-4">
-              <div className="text-sm text-slate-500">Training Incomplete</div>
-              <div className="mt-2 text-4xl font-bold text-red-600">
+            <div>
+              <div className="text-4xl font-bold text-red-600">
                 {personnelTrainingIncomplete.length}
               </div>
+              <div className="text-sm text-slate-500">Training incomplete</div>
             </div>
 
-            <div className="rounded-xl border border-slate-200 p-4">
-              <div className="text-sm text-slate-500">Unverified Machines</div>
-              <div className="mt-2 text-4xl font-bold text-amber-600">
+            <div>
+              <div className="text-4xl font-bold text-amber-600">
                 {personnelSecureMachineIncomplete.length}
               </div>
+              <div className="text-sm text-slate-500">Machine gaps</div>
             </div>
 
-            <div className="rounded-xl border border-slate-200 p-4">
-              <div className="text-sm text-slate-500">Authorized / Compliant</div>
-              <div className="mt-2 text-4xl font-bold text-blue-600">
+            <div>
+              <div className="text-4xl font-bold text-blue-600">
                 {personnel.length === 0
                   ? "0%"
                   : `${formatPercent(
@@ -1108,41 +1172,71 @@ export default async function DashboardPage() {
                       personnel.length
                     )}%`}
               </div>
+              <div className="text-sm text-slate-500">Training coverage</div>
             </div>
           </div>
         </div>
 
-        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm xl:col-span-1">
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="mb-4 flex items-center justify-between gap-4">
-            <h2 className="text-xl font-semibold text-slate-900">Incident Reporting</h2>
-            <Link
-              href="/incident-reporting"
-              className="text-sm font-medium text-blue-600 hover:text-blue-700"
-            >
-              View Incidents
+            <h2 className="text-lg font-semibold text-slate-900">Incidents</h2>
+            <Link href="/incident-reporting" className="text-sm font-medium text-blue-600">
+              View
             </Link>
           </div>
 
           <div className="space-y-4">
-            <div className="rounded-xl border border-slate-200 p-4">
-              <div className="text-sm text-slate-500">Open Incidents</div>
-              <div className="mt-2 text-4xl font-bold text-blue-600">
+            <div>
+              <div className="text-4xl font-bold text-blue-600">
                 {openIncidentReports.length}
               </div>
+              <div className="text-sm text-slate-500">Open incidents</div>
             </div>
 
-            <div className="rounded-xl border border-slate-200 p-4">
-              <div className="text-sm text-slate-500">High Risk</div>
-              <div className="mt-2 text-4xl font-bold text-red-600">
+            <div>
+              <div className="text-4xl font-bold text-red-600">
                 {highRiskIncidentReports.length}
               </div>
+              <div className="text-sm text-slate-500">High risk</div>
             </div>
 
-            <div className="rounded-xl border border-slate-200 p-4">
-              <div className="text-sm text-slate-500">Sensitive / Controlled Concern</div>
-              <div className="mt-2 text-4xl font-bold text-amber-600">
+            <div>
+              <div className="text-4xl font-bold text-amber-600">
                 {sensitiveIncidentReports.length}
               </div>
+              <div className="text-sm text-slate-500">Controlled concerns</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="mb-4 flex items-center justify-between gap-4">
+            <h2 className="text-lg font-semibold text-slate-900">POA&amp;M</h2>
+            <Link href="/corrective-actions" className="text-sm font-medium text-blue-600">
+              View
+            </Link>
+          </div>
+
+          <div className="space-y-4">
+            <div>
+              <div className="text-4xl font-bold text-blue-600">
+                {openCorrectiveActions.length}
+              </div>
+              <div className="text-sm text-slate-500">Open actions</div>
+            </div>
+
+            <div>
+              <div className="text-4xl font-bold text-red-600">
+                {overdueCorrectiveActions.length}
+              </div>
+              <div className="text-sm text-slate-500">Overdue</div>
+            </div>
+
+            <div>
+              <div className="text-4xl font-bold text-amber-600">
+                {highRiskCorrectiveActions.length}
+              </div>
+              <div className="text-sm text-slate-500">High risk</div>
             </div>
           </div>
         </div>
@@ -1237,9 +1331,16 @@ export default async function DashboardPage() {
             </div>
 
             <div className="flex items-start justify-between gap-4 border-b border-slate-100 pb-3">
-              <div className="text-slate-700">High-Risk Incidents</div>
+              <div className="text-slate-700">POA&M / Corrective Actions</div>
               <div className="text-right text-slate-900">
-                {highRiskIncidentReports.length} high-risk / {closedIncidentReports.length} closed
+                {openCorrectiveActions.length} open / {correctiveActions.length} total
+              </div>
+            </div>
+
+            <div className="flex items-start justify-between gap-4 border-b border-slate-100 pb-3">
+              <div className="text-slate-700">Overdue Corrective Actions</div>
+              <div className="text-right text-slate-900">
+                {overdueCorrectiveActions.length} overdue / {closedCorrectiveActions.length} closed
               </div>
             </div>
 
@@ -1267,10 +1368,21 @@ export default async function DashboardPage() {
         </div>
       </div>
 
-      {draftIncidentReports.length > 0 && (
+      {(draftIncidentReports.length > 0 || openCorrectiveActions.length > 0) && (
         <div className="rounded-2xl border border-yellow-200 bg-yellow-50 p-6 text-sm text-yellow-900">
-          You currently have {draftIncidentReports.length} draft incident report
-          {draftIncidentReports.length === 1 ? "" : "s"} that may need review or completion.
+          {draftIncidentReports.length > 0 && (
+            <div>
+              You currently have {draftIncidentReports.length} draft incident report
+              {draftIncidentReports.length === 1 ? "" : "s"} that may need review or completion.
+            </div>
+          )}
+
+          {openCorrectiveActions.length > 0 && (
+            <div className={draftIncidentReports.length > 0 ? "mt-2" : ""}>
+              You currently have {openCorrectiveActions.length} open POA&amp;M / corrective action
+              item{openCorrectiveActions.length === 1 ? "" : "s"} requiring tracking.
+            </div>
+          )}
         </div>
       )}
     </div>
