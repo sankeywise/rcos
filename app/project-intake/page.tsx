@@ -362,6 +362,53 @@ export default async function ProjectIntakePage() {
     redirect("/project-intake");
   }
 
+  async function deleteIntakeReview(formData: FormData) {
+    "use server";
+
+    const supabase = await createServerSupabaseClient();
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      redirect("/login");
+    }
+
+    const { data: membership } = await supabase
+      .from("organization_memberships")
+      .select("organization_id")
+      .eq("user_id", user.id)
+      .eq("is_active", true)
+      .single();
+
+    if (!membership) {
+      redirect("/");
+    }
+
+    const reviewId = String(formData.get("review_id") || "").trim();
+
+    if (!reviewId) {
+      throw new Error("Review ID is required.");
+    }
+
+    const { error } = await supabase
+      .from("project_intake_reviews")
+      .delete()
+      .eq("id", Number(reviewId))
+      .eq("organization_id", membership.organization_id);
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    revalidatePath("/project-intake");
+    revalidatePath("/");
+    revalidatePath("/audit-mode");
+
+    redirect("/project-intake");
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
@@ -757,12 +804,24 @@ export default async function ProjectIntakePage() {
                       </div>
                     </div>
 
-                    <Link
-                      href={`/project-intake/${review.id}`}
-                      className="mt-4 inline-flex rounded-lg bg-blue-600 px-3 py-2 text-xs font-medium text-white hover:bg-blue-700"
-                    >
-                      View / Print Determination
-                    </Link>
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <Link
+                        href={`/project-intake/${review.id}`}
+                        className="inline-flex rounded-lg bg-blue-600 px-3 py-2 text-xs font-medium text-white hover:bg-blue-700"
+                      >
+                        View / Print Determination
+                      </Link>
+
+                      <form action={deleteIntakeReview}>
+                        <input type="hidden" name="review_id" value={review.id} />
+                        <button
+                          type="submit"
+                          className="inline-flex rounded-lg bg-red-600 px-3 py-2 text-xs font-medium text-white hover:bg-red-700"
+                        >
+                          Delete Review
+                        </button>
+                      </form>
+                    </div>
                   </div>
                 );
               })}
