@@ -29,8 +29,25 @@ type ProjectRow = {
   export_control_type: string | null;
 };
 
+type ProjectComplianceItem = {
+  id: number;
+  project_id: number;
+  item_name: string;
+  item_type: string | null;
+  control_family_code: string | null;
+  related_control: string | null;
+  status: string | null;
+  owner: string | null;
+  due_date: string | null;
+  requires_evidence: boolean | null;
+  evidence_status: string | null;
+  evidence_reference: string | null;
+  sensitivity_level: string | null;
+};
+
 type PersonnelRow = {
   id: number;
+  project_id: number | null;
   name: string | null;
   full_name: string | null;
   training_complete: boolean | null;
@@ -43,6 +60,7 @@ type PersonnelRow = {
 type IncidentReport = {
   id: number;
   title: string | null;
+  project_name: string | null;
   incident_status: string | null;
   severity: string | null;
   involves_cui: boolean | null;
@@ -60,6 +78,7 @@ type CorrectiveAction = {
   severity: string | null;
   owner: string | null;
   due_date: string | null;
+  related_project: string | null;
   related_control: string | null;
   source_type: string | null;
 };
@@ -97,6 +116,7 @@ function isCompleteStatus(value?: string | null) {
     "closed",
     "resolved",
     "validated",
+    "not applicable",
   ].includes(normalizeStatus(value));
 }
 
@@ -108,17 +128,33 @@ function getBadgeClass(value?: string | null) {
   }
 
   if (
-    ["draft", "pending", "in progress", "open", "partial", "in review", "pending validation", "medium"].includes(
-      normalized
-    )
+    [
+      "draft",
+      "pending",
+      "in progress",
+      "open",
+      "partial",
+      "in review",
+      "pending validation",
+      "medium",
+      "referenced",
+      "provided",
+    ].includes(normalized)
   ) {
     return "bg-yellow-100 text-yellow-700";
   }
 
   if (
-    ["missing", "overdue", "expired", "non-compliant", "high", "critical"].includes(
-      normalized
-    )
+    [
+      "missing",
+      "overdue",
+      "expired",
+      "non-compliant",
+      "high",
+      "critical",
+      "not started",
+      "not provided",
+    ].includes(normalized)
   ) {
     return "bg-red-100 text-red-700";
   }
@@ -158,8 +194,36 @@ function isCorrectiveActionOverdue(action: CorrectiveAction) {
   return dueDate < today;
 }
 
+function isProjectItemOverdue(item: ProjectComplianceItem) {
+  if (!item.due_date || isCompleteStatus(item.status)) return false;
+
+  const dueDate = new Date(item.due_date);
+  const today = new Date();
+
+  dueDate.setHours(0, 0, 0, 0);
+  today.setHours(0, 0, 0, 0);
+
+  return dueDate < today;
+}
+
 function displayPersonName(person: PersonnelRow) {
   return person.full_name || person.name || "Unnamed Person";
+}
+
+function getProjectName(project: ProjectRow, index: number) {
+  if (project.project_name && project.project_name.trim().length > 0) {
+    return project.project_name;
+  }
+
+  const fallback = [
+    "Quantum Navigation",
+    "Secure Drone Comms",
+    "AI Radar System",
+    "Autonomy Research",
+    "Protected Data Project",
+  ];
+
+  return fallback[index] || `Project ${project.id}`;
 }
 
 export default async function AuditModePage() {
@@ -203,21 +267,28 @@ export default async function AuditModePage() {
     .eq("organization_id", orgId)
     .order("id", { ascending: true });
 
+  const projectComplianceItemsResult = await supabase
+    .from("project_compliance_items")
+    .select("id, project_id, item_name, item_type, control_family_code, related_control, status, owner, due_date, requires_evidence, evidence_status, evidence_reference, sensitivity_level")
+    .eq("organization_id", orgId)
+    .order("project_id", { ascending: true })
+    .order("id", { ascending: true });
+
   const personnelResult = await supabase
     .from("personnel")
-    .select("id, name, full_name, training_complete, citizenship_status, rps_screening_status, secure_machine_name, secure_machine_status")
+    .select("id, project_id, name, full_name, training_complete, citizenship_status, rps_screening_status, secure_machine_name, secure_machine_status")
     .eq("organization_id", orgId)
     .order("id", { ascending: true });
 
   const incidentsResult = await supabase
     .from("incident_reports")
-    .select("id, title, incident_status, severity, involves_cui, involves_itar, involves_ear, involves_pii, cyber_related, created_at")
+    .select("id, title, project_name, incident_status, severity, involves_cui, involves_itar, involves_ear, involves_pii, cyber_related, created_at")
     .eq("organization_id", orgId)
     .order("created_at", { ascending: false });
 
   const actionsResult = await supabase
     .from("corrective_actions")
-    .select("id, title, status, severity, owner, due_date, related_control, source_type")
+    .select("id, title, status, severity, owner, due_date, related_project, related_control, source_type")
     .eq("organization_id", orgId)
     .order("created_at", { ascending: false });
 
@@ -230,6 +301,8 @@ export default async function AuditModePage() {
   const families: CmmcFamily[] = (familiesResult.data ?? []) as CmmcFamily[];
   const documents: CmmcDocument[] = (documentsResult.data ?? []) as CmmcDocument[];
   const projects: ProjectRow[] = (projectsResult.data ?? []) as ProjectRow[];
+  const projectComplianceItems: ProjectComplianceItem[] =
+    (projectComplianceItemsResult.data ?? []) as ProjectComplianceItem[];
   const personnel: PersonnelRow[] = (personnelResult.data ?? []) as PersonnelRow[];
   const incidents: IncidentReport[] = (incidentsResult.data ?? []) as IncidentReport[];
   const correctiveActions: CorrectiveAction[] = (actionsResult.data ?? []) as CorrectiveAction[];
@@ -239,6 +312,23 @@ export default async function AuditModePage() {
 
   const completeDocuments = documents.filter((doc) => isCompleteStatus(doc.status));
   const openDocuments = documents.filter((doc) => !isCompleteStatus(doc.status));
+
+  const projectItemsComplete = projectComplianceItems.filter((item) =>
+    isCompleteStatus(item.status)
+  );
+  const projectItemsOpen = projectComplianceItems.filter(
+    (item) => !isCompleteStatus(item.status)
+  );
+  const projectItemsOverdue = projectComplianceItems.filter((item) =>
+    isProjectItemOverdue(item)
+  );
+  const projectEvidenceMissing = projectComplianceItems.filter(
+    (item) =>
+      item.requires_evidence &&
+      !["provided", "referenced", "verified", "not applicable"].includes(
+        normalizeStatus(item.evidence_status)
+      )
+  );
 
   const personnelTrainingComplete = personnel.filter((person) => person.training_complete);
   const personnelTrainingIncomplete = personnel.filter((person) => !person.training_complete);
@@ -302,6 +392,10 @@ export default async function AuditModePage() {
     typeof profile?.sprs_score === "number",
     completeControlAreas.length === controlStatusCards.length,
     documents.length > 0 && openDocuments.length === 0,
+    projects.length > 0,
+    projectComplianceItems.length > 0,
+    projectItemsOverdue.length === 0,
+    projectEvidenceMissing.length === 0,
     personnel.length > 0 && personnelTrainingIncomplete.length === 0,
     personnel.length > 0 && personnelScreeningIncomplete.length === 0,
     personnel.length > 0 && personnelMachineIncomplete.length === 0,
@@ -327,9 +421,26 @@ export default async function AuditModePage() {
     }
   });
 
+  const projectItemMap: Record<number, ProjectComplianceItem[]> = {};
+  projectComplianceItems.forEach((item) => {
+    if (!projectItemMap[item.project_id]) {
+      projectItemMap[item.project_id] = [];
+    }
+    projectItemMap[item.project_id].push(item);
+  });
+
   const auditBlockers = [
     ...(openDocuments.length > 0
       ? [`${openDocuments.length} policy/document item(s) are not complete`]
+      : []),
+    ...(projectItemsOpen.length > 0
+      ? [`${projectItemsOpen.length} project compliance item(s) are open`]
+      : []),
+    ...(projectItemsOverdue.length > 0
+      ? [`${projectItemsOverdue.length} project compliance item(s) are overdue`]
+      : []),
+    ...(projectEvidenceMissing.length > 0
+      ? [`${projectEvidenceMissing.length} project evidence reference(s) are missing`]
       : []),
     ...(personnelTrainingIncomplete.length > 0
       ? [`${personnelTrainingIncomplete.length} personnel training item(s) are incomplete`]
@@ -360,7 +471,7 @@ export default async function AuditModePage() {
         <div>
           <h1 className="text-3xl font-bold text-slate-900">Audit Mode</h1>
           <p className="mt-1 text-slate-600">
-            Assessor-style view of readiness, control families, policies, incidents, personnel, and corrective actions.
+            Assessor-style view of readiness, projects, project compliance, policies, incidents, personnel, and corrective actions.
           </p>
         </div>
 
@@ -378,31 +489,37 @@ export default async function AuditModePage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-6">
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm xl:col-span-1">
           <div className="text-sm font-medium text-slate-500">Audit Readiness</div>
           <div className="mt-3 text-5xl font-bold text-blue-600">{readinessScore}%</div>
           <div className="mt-2 text-sm text-slate-500">
-            {readinessChecks.filter(Boolean).length} of {readinessChecks.length} readiness checks complete
+            {readinessChecks.filter(Boolean).length} of {readinessChecks.length} checks complete
           </div>
         </div>
 
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="text-sm font-medium text-slate-500">CMMC Controls</div>
-          <div className="mt-3 text-5xl font-bold text-slate-900">{totalControls}</div>
-          <div className="mt-2 text-sm text-slate-500">Level 2 control baseline</div>
+          <div className="text-sm font-medium text-slate-500">Projects</div>
+          <div className="mt-3 text-5xl font-bold text-slate-900">{projects.length}</div>
+          <div className="mt-2 text-sm text-slate-500">Tracked projects</div>
         </div>
 
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="text-sm font-medium text-slate-500">Policies / Docs</div>
-          <div className="mt-3 text-5xl font-bold text-slate-900">{documents.length}</div>
-          <div className="mt-2 text-sm text-slate-500">{completeDocuments.length} complete</div>
+          <div className="text-sm font-medium text-slate-500">Project Items</div>
+          <div className="mt-3 text-5xl font-bold text-slate-900">{projectComplianceItems.length}</div>
+          <div className="mt-2 text-sm text-slate-500">{projectItemsComplete.length} complete</div>
         </div>
 
         <div className="rounded-2xl border border-red-200 bg-white p-6 shadow-sm">
           <div className="text-sm font-medium text-slate-500">Audit Blockers</div>
           <div className="mt-3 text-5xl font-bold text-red-600">{auditBlockers.length}</div>
           <div className="mt-2 text-sm text-slate-500">Requires attention</div>
+        </div>
+
+        <div className="rounded-2xl border border-amber-200 bg-white p-6 shadow-sm">
+          <div className="text-sm font-medium text-slate-500">Evidence Refs Missing</div>
+          <div className="mt-3 text-5xl font-bold text-amber-600">{projectEvidenceMissing.length}</div>
+          <div className="mt-2 text-sm text-slate-500">Project-level references</div>
         </div>
 
         <div className="rounded-2xl border border-amber-200 bg-white p-6 shadow-sm">
@@ -485,6 +602,127 @@ export default async function AuditModePage() {
           >
             Manage SPRS / SSP / POA&M
           </Link>
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h2 className="text-xl font-semibold text-slate-900">Project-Level Audit Readiness</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Project-specific readiness using project compliance items, personnel, incidents, and remediation data.
+            </p>
+          </div>
+
+          <Link
+            href="/project-compliance"
+            className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white"
+          >
+            Open Project Workspace
+          </Link>
+        </div>
+
+        <div className="mt-5 space-y-4">
+          {projects.length === 0 ? (
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+              No projects found.
+            </div>
+          ) : (
+            projects.map((project, index) => {
+              const projectName = getProjectName(project, index);
+              const items = projectItemMap[project.id] || [];
+              const complete = items.filter((item) => isCompleteStatus(item.status)).length;
+              const readiness = percent(complete, items.length);
+              const openItems = items.filter((item) => !isCompleteStatus(item.status));
+              const overdueItems = items.filter((item) => isProjectItemOverdue(item));
+              const evidenceMissing = items.filter(
+                (item) =>
+                  item.requires_evidence &&
+                  !["provided", "referenced", "verified", "not applicable"].includes(
+                    normalizeStatus(item.evidence_status)
+                  )
+              );
+
+              const projectPersonnel = personnel.filter((person) => person.project_id === project.id);
+              const projectPersonnelGaps = projectPersonnel.filter(
+                (person) =>
+                  !person.training_complete ||
+                  !["cleared", "verified", "complete", "completed"].includes(
+                    normalizeStatus(person.rps_screening_status)
+                  ) ||
+                  !person.secure_machine_name ||
+                  normalizeStatus(person.secure_machine_status) !== "verified"
+              );
+
+              const projectIncidents = incidents.filter((incident) =>
+                normalizeStatus(incident.project_name).includes(normalizeStatus(projectName))
+              );
+
+              const projectActions = correctiveActions.filter((action) =>
+                normalizeStatus(action.related_project).includes(normalizeStatus(projectName))
+              );
+
+              return (
+                <div key={project.id} className="rounded-xl border border-slate-200 p-4">
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                    <div>
+                      <div className="text-lg font-semibold text-slate-900">{projectName}</div>
+                      <div className="mt-1 text-sm text-slate-500">
+                        {project.sponsor || "No sponsor"} • {project.status || "Pending"} •{" "}
+                        {project.classification || "Classification TBD"} •{" "}
+                        {project.export_control_type || "Export TBD"}
+                      </div>
+                    </div>
+
+                    <div className="text-right">
+                      <div className="text-3xl font-bold text-blue-600">{readiness}%</div>
+                      <div className="text-xs text-slate-500">Project readiness</div>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 h-2 w-full overflow-hidden rounded-full bg-slate-200">
+                    <div
+                      className="h-2 rounded-full bg-blue-600"
+                      style={{ width: `${readiness}%` }}
+                    />
+                  </div>
+
+                  <div className="mt-4 grid grid-cols-2 gap-3 text-sm md:grid-cols-5">
+                    <div className="rounded-lg border border-slate-200 p-3">
+                      <div className="font-semibold text-slate-900">{items.length}</div>
+                      <div className="text-xs text-slate-500">Items</div>
+                    </div>
+
+                    <div className="rounded-lg border border-slate-200 p-3">
+                      <div className="font-semibold text-red-600">{openItems.length}</div>
+                      <div className="text-xs text-slate-500">Open</div>
+                    </div>
+
+                    <div className="rounded-lg border border-slate-200 p-3">
+                      <div className="font-semibold text-red-600">{overdueItems.length}</div>
+                      <div className="text-xs text-slate-500">Overdue</div>
+                    </div>
+
+                    <div className="rounded-lg border border-slate-200 p-3">
+                      <div className="font-semibold text-amber-600">{evidenceMissing.length}</div>
+                      <div className="text-xs text-slate-500">Evidence Refs Missing</div>
+                    </div>
+
+                    <div className="rounded-lg border border-slate-200 p-3">
+                      <div className="font-semibold text-red-600">{projectPersonnelGaps.length}</div>
+                      <div className="text-xs text-slate-500">Personnel Gaps</div>
+                    </div>
+                  </div>
+
+                  {(projectIncidents.length > 0 || projectActions.length > 0) && (
+                    <div className="mt-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
+                      {projectIncidents.length} incident(s) and {projectActions.length} corrective action(s) reference this project.
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
         </div>
       </div>
 
@@ -696,8 +934,9 @@ export default async function AuditModePage() {
 
       <div className="rounded-2xl border border-amber-200 bg-amber-50 p-6 text-sm text-amber-900">
         Audit Mode is intended to provide an assessor-style readiness view. Sensitive evidence,
-        CUI, enclave diagrams, vulnerability reports, and technical configurations should remain in
-        approved secure repositories and be referenced through RCOS rather than uploaded directly.
+        CUI, enclave diagrams, vulnerability reports, firewall configurations, SSP internals, and
+        technical configurations should remain in approved secure repositories and be referenced
+        through RCOS rather than uploaded directly.
       </div>
     </div>
   );
