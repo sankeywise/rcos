@@ -18,6 +18,7 @@ const complianceNav = [
 
 const bottomNav = [
   { label: "Incident Reporting", href: "/incident-reporting" },
+  { label: "POA&M / Corrective Actions", href: "/corrective-actions" },
   { label: "Audit Mode", href: "/audit-mode" },
   { label: "Compliance Team", href: "/compliance-team" },
   { label: "Manage Users", href: "/users" },
@@ -40,7 +41,7 @@ export default function Sidebar() {
           <div className="text-3xl font-bold tracking-tight">RCOS</div>
         </div>
 
-        <nav className="flex-1 space-y-2 px-4">
+        <nav className="flex-1 space-y-2 overflow-y-auto px-4 pb-4">
           {mainNav.map((item) => (
             <Link
               key={item.href}
