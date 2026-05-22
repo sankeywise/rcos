@@ -602,9 +602,12 @@ export default async function AuditModePage() {
             Back to Action Center
           </Link>
 
-          <button className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm">
-            Export Audit Package
-          </button>
+          <Link
+  href="/audit-mode/audit-package"
+  className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm"
+>
+  Export Audit Package
+</Link>
         </div>
       </div>
 
