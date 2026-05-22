@@ -126,6 +126,33 @@ type ProjectComplianceItemRow = {
   created_at: string | null;
 };
 
+type ProjectIntakeReviewRow = {
+  id: number;
+  project_id: number | null;
+  project_title: string | null;
+  sponsor: string | null;
+  principal_investigator: string | null;
+  review_status: string | null;
+  review_owner: string | null;
+  review_date: string | null;
+  involves_cui: boolean | null;
+  involves_itar: boolean | null;
+  involves_ear: boolean | null;
+  involves_noforn: boolean | null;
+  involves_foreign_nationals: boolean | null;
+  involves_controlled_technical_data: boolean | null;
+  involves_secure_enclave: boolean | null;
+  requires_tcp: boolean | null;
+  requires_rps: boolean | null;
+  requires_cmmc_review: boolean | null;
+  requires_secure_machine_access: boolean | null;
+  requires_fso_review: boolean | null;
+  requires_iso_review: boolean | null;
+  requires_eco_review: boolean | null;
+  final_determination: string | null;
+  created_at: string | null;
+};
+
 type CriticalAction = {
   label: string;
   action: string;
@@ -179,13 +206,15 @@ function getBadgeClass(status?: string | null) {
     normalized === "pending" ||
     normalized === "draft" ||
     normalized === "review required" ||
+    normalized === "requires review" ||
     normalized === "partial" ||
     normalized === "open" ||
     normalized === "in review" ||
     normalized === "pending validation" ||
     normalized === "medium" ||
     normalized === "referenced" ||
-    normalized === "provided"
+    normalized === "provided" ||
+    normalized === "moderate risk"
   ) {
     return "bg-yellow-100 text-yellow-700";
   }
@@ -199,7 +228,9 @@ function getBadgeClass(status?: string | null) {
     normalized === "critical" ||
     normalized === "high" ||
     normalized === "not started" ||
-    normalized === "not provided"
+    normalized === "not provided" ||
+    normalized === "high risk" ||
+    normalized === "not approved"
   ) {
     return "bg-red-100 text-red-700";
   }
@@ -216,29 +247,12 @@ function displayPersonName(person: PersonnelRow) {
   return person.full_name || person.name || "Unnamed Person";
 }
 
-function formatDate(value?: string | null) {
-  if (!value) return "—";
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-
-  return date.toLocaleDateString();
-}
-
 function getProjectDisplayName(project: ProjectRow, index: number) {
   if (project.project_name && project.project_name.trim().length > 0) {
     return project.project_name;
   }
 
-  const fallbackNames = [
-    "Quantum Navigation",
-    "Secure Drone Comms",
-    "AI Radar System",
-    "Autonomy Research",
-    "Protected Data Project",
-  ];
-
-  return fallbackNames[index] || `Project ${project.id}`;
+  return `Unnamed Project ${project.id || index + 1}`;
 }
 
 function getProjectReadiness(
@@ -351,6 +365,30 @@ function isProjectItemOverdue(item: ProjectComplianceItemRow) {
   today.setHours(0, 0, 0, 0);
 
   return dueDate < today;
+}
+
+function getIntakeRiskLevel(review: ProjectIntakeReviewRow) {
+  const flags = [
+    review.involves_cui,
+    review.involves_itar,
+    review.involves_ear,
+    review.involves_noforn,
+    review.involves_foreign_nationals,
+    review.involves_controlled_technical_data,
+    review.involves_secure_enclave,
+    review.requires_tcp,
+    review.requires_cmmc_review,
+  ].filter(Boolean).length;
+
+  if (flags >= 5) return "High Risk";
+  if (flags >= 2) return "Moderate Risk";
+  return "Low Risk";
+}
+
+function isIntakeFinal(review: ProjectIntakeReviewRow) {
+  return ["final", "approved", "complete", "completed", "cleared"].includes(
+    normalizeStatus(review.review_status)
+  );
 }
 
 export default async function DashboardPage() {
@@ -523,6 +561,37 @@ export default async function DashboardPage() {
     .order("project_id", { ascending: true })
     .order("id", { ascending: true });
 
+  const projectIntakeReviewsResult = await supabase
+    .from("project_intake_reviews")
+    .select(`
+      id,
+      project_id,
+      project_title,
+      sponsor,
+      principal_investigator,
+      review_status,
+      review_owner,
+      review_date,
+      involves_cui,
+      involves_itar,
+      involves_ear,
+      involves_noforn,
+      involves_foreign_nationals,
+      involves_controlled_technical_data,
+      involves_secure_enclave,
+      requires_tcp,
+      requires_rps,
+      requires_cmmc_review,
+      requires_secure_machine_access,
+      requires_fso_review,
+      requires_iso_review,
+      requires_eco_review,
+      final_determination,
+      created_at
+    `)
+    .eq("organization_id", orgId)
+    .order("created_at", { ascending: false });
+
   const projects: ProjectRow[] = (projectsResult.data ?? []) as ProjectRow[];
   const artifacts: ArtifactRow[] = (artifactsResult.data ?? []) as ArtifactRow[];
   const personnel: PersonnelRow[] = (personnelResult.data ?? []) as PersonnelRow[];
@@ -538,6 +607,8 @@ export default async function DashboardPage() {
     (correctiveActionsResult.data ?? []) as CorrectiveActionRow[];
   const projectComplianceItems: ProjectComplianceItemRow[] =
     (projectComplianceItemsResult.data ?? []) as ProjectComplianceItemRow[];
+  const projectIntakeReviews: ProjectIntakeReviewRow[] =
+    (projectIntakeReviewsResult.data ?? []) as ProjectIntakeReviewRow[];
 
   const complianceTeamTrainingMap: Record<string, ComplianceTeamTrainingRow[]> = {};
   complianceTeamTraining.forEach((row) => {
@@ -576,6 +647,40 @@ export default async function DashboardPage() {
     if (records.length === 0) return true;
     return !records.every((row) => isCompleteStatus(row.status));
   });
+
+  const draftOrInReviewIntakeReviews = projectIntakeReviews.filter((review) =>
+    ["draft", "pending", "in review", "requires review"].includes(
+      normalizeStatus(review.review_status)
+    )
+  );
+
+  const finalizedIntakeReviews = projectIntakeReviews.filter((review) =>
+    isIntakeFinal(review)
+  );
+
+  const highRiskIntakeReviews = projectIntakeReviews.filter(
+    (review) => getIntakeRiskLevel(review) === "High Risk"
+  );
+
+  const intakeReviewsRequiringEco = projectIntakeReviews.filter(
+    (review) => review.requires_eco_review && !isIntakeFinal(review)
+  );
+
+  const intakeReviewsRequiringIso = projectIntakeReviews.filter(
+    (review) => review.requires_iso_review && !isIntakeFinal(review)
+  );
+
+  const intakeReviewsRequiringFso = projectIntakeReviews.filter(
+    (review) => review.requires_fso_review && !isIntakeFinal(review)
+  );
+
+  const intakeReviewsRequiringCmmc = projectIntakeReviews.filter(
+    (review) => review.requires_cmmc_review && !isIntakeFinal(review)
+  );
+
+  const intakeReviewsRequiringTcp = projectIntakeReviews.filter(
+    (review) => review.requires_tcp && !isIntakeFinal(review)
+  );
 
   const openIncidentReports = incidentReports.filter((incident) =>
     ["open", "in review", "in progress", "submitted"].includes(
@@ -636,34 +741,13 @@ export default async function DashboardPage() {
   const controlCards = [
     { label: "SSP", status: cmmcProfile?.ssp_status || "Draft" },
     { label: "POA&M", status: cmmcProfile?.poam_status || "Draft" },
-    {
-      label: "Incident Response",
-      status: cmmcProfile?.incident_response_status || "Draft",
-    },
-    {
-      label: "Access Control",
-      status: cmmcProfile?.access_control_status || "Draft",
-    },
-    {
-      label: "Audit Logging",
-      status: cmmcProfile?.audit_logging_status || "Draft",
-    },
-    {
-      label: "Media Protection",
-      status: cmmcProfile?.media_protection_status || "Draft",
-    },
-    {
-      label: "Training Program",
-      status: cmmcProfile?.training_program_status || "Draft",
-    },
-    {
-      label: "Vendor Management",
-      status: cmmcProfile?.vendor_management_status || "Draft",
-    },
-    {
-      label: "Scoping",
-      status: cmmcProfile?.scoping_status || "Draft",
-    },
+    { label: "Incident Response", status: cmmcProfile?.incident_response_status || "Draft" },
+    { label: "Access Control", status: cmmcProfile?.access_control_status || "Draft" },
+    { label: "Audit Logging", status: cmmcProfile?.audit_logging_status || "Draft" },
+    { label: "Media Protection", status: cmmcProfile?.media_protection_status || "Draft" },
+    { label: "Training Program", status: cmmcProfile?.training_program_status || "Draft" },
+    { label: "Vendor Management", status: cmmcProfile?.vendor_management_status || "Draft" },
+    { label: "Scoping", status: cmmcProfile?.scoping_status || "Draft" },
   ];
 
   const incompleteControls = controlCards.filter(
@@ -673,39 +757,30 @@ export default async function DashboardPage() {
   const readinessChecks = [
     { label: "Organization CMMC profile", complete: Boolean(cmmcProfile) },
     { label: "SPRS score entered", complete: typeof cmmcProfile?.sprs_score === "number" },
-    {
-      label: "Assessment status complete",
-      complete: isCompleteStatus(cmmcProfile?.assessment_status),
-    },
+    { label: "Assessment status complete", complete: isCompleteStatus(cmmcProfile?.assessment_status) },
     { label: "SSP complete", complete: isCompleteStatus(cmmcProfile?.ssp_status) },
     { label: "POA&M complete", complete: isCompleteStatus(cmmcProfile?.poam_status) },
+    { label: "Incident response complete", complete: isCompleteStatus(cmmcProfile?.incident_response_status) },
+    { label: "Access control complete", complete: isCompleteStatus(cmmcProfile?.access_control_status) },
+    { label: "Audit logging complete", complete: isCompleteStatus(cmmcProfile?.audit_logging_status) },
+    { label: "Media protection complete", complete: isCompleteStatus(cmmcProfile?.media_protection_status) },
+    { label: "Training program complete", complete: isCompleteStatus(cmmcProfile?.training_program_status) },
+    { label: "Vendor management complete", complete: isCompleteStatus(cmmcProfile?.vendor_management_status) },
+    { label: "Scoping complete", complete: isCompleteStatus(cmmcProfile?.scoping_status) },
     {
-      label: "Incident response complete",
-      complete: isCompleteStatus(cmmcProfile?.incident_response_status),
+      label: "Project intake workflow active",
+      complete: projectIntakeReviews.length > 0,
     },
     {
-      label: "Access control complete",
-      complete: isCompleteStatus(cmmcProfile?.access_control_status),
+      label: "No high-risk intake reviews pending",
+      complete: highRiskIntakeReviews.length === 0,
     },
     {
-      label: "Audit logging complete",
-      complete: isCompleteStatus(cmmcProfile?.audit_logging_status),
-    },
-    {
-      label: "Media protection complete",
-      complete: isCompleteStatus(cmmcProfile?.media_protection_status),
-    },
-    {
-      label: "Training program complete",
-      complete: isCompleteStatus(cmmcProfile?.training_program_status),
-    },
-    {
-      label: "Vendor management complete",
-      complete: isCompleteStatus(cmmcProfile?.vendor_management_status),
-    },
-    {
-      label: "Scoping complete",
-      complete: isCompleteStatus(cmmcProfile?.scoping_status),
+      label: "No intake reviews awaiting ECO / ISO / FSO routing",
+      complete:
+        intakeReviewsRequiringEco.length === 0 &&
+        intakeReviewsRequiringIso.length === 0 &&
+        intakeReviewsRequiringFso.length === 0,
     },
     {
       label: "All project documents complete",
@@ -775,10 +850,6 @@ export default async function DashboardPage() {
     (project) => normalizeStatus(project.status) === "active"
   );
 
-  const documentsCompleteCount = artifacts.filter((doc) =>
-    isCompleteStatus(doc.status)
-  ).length;
-
   const personnelTrainingCompleteCount = personnel.filter(
     (person) => person.training_complete
   ).length;
@@ -788,27 +859,33 @@ export default async function DashboardPage() {
     return records.length > 0 && records.every((row) => isCompleteStatus(row.status));
   }).length;
 
-  const evidenceGaps = artifacts
-    .filter((artifact) => !isCompleteStatus(artifact.status))
-    .slice(0, 5)
-    .map((artifact) => ({
-      ...artifact,
-      evidenceStatus: getEvidenceStatus(artifact),
-    }));
-
   const criticalActions: CriticalAction[] = [
+    ...highRiskIntakeReviews.slice(0, 2).map((review) => ({
+      label: `Review high-risk intake: ${review.project_title || "Untitled intake"}`,
+      action: "Review Intake",
+      href: `/project-intake/${review.id}`,
+      severity: "Critical" as const,
+      owner: review.review_owner || "Compliance",
+    })),
+    ...intakeReviewsRequiringEco.slice(0, 1).map((review) => ({
+      label: `ECO review required: ${review.project_title || "Untitled intake"}`,
+      action: "Open Intake",
+      href: `/project-intake/${review.id}`,
+      severity: "High" as const,
+      owner: "ECO",
+    })),
+    ...intakeReviewsRequiringIso.slice(0, 1).map((review) => ({
+      label: `ISO review required: ${review.project_title || "Untitled intake"}`,
+      action: "Open Intake",
+      href: `/project-intake/${review.id}`,
+      severity: "High" as const,
+      owner: "ISO",
+    })),
     ...overdueProjectComplianceItems.slice(0, 2).map((item) => ({
       label: `Resolve overdue project compliance item: ${item.item_name}`,
       action: "Resolve",
       href: "/project-compliance",
       severity: "Critical" as const,
-      owner: item.owner || "Unassigned",
-    })),
-    ...missingProjectEvidenceReferences.slice(0, 2).map((item) => ({
-      label: `Add evidence reference for project item: ${item.item_name}`,
-      action: "Add Reference",
-      href: "/project-compliance",
-      severity: "High" as const,
       owner: item.owner || "Unassigned",
     })),
     ...overdueCorrectiveActions.slice(0, 2).map((action) => ({
@@ -835,6 +912,30 @@ export default async function DashboardPage() {
   ].slice(0, 5);
 
   const topRisks: RiskItem[] = [
+    ...(highRiskIntakeReviews.length > 0
+      ? [
+          {
+            label: `${highRiskIntakeReviews.length} high-risk project intake review(s) require routing`,
+            risk: "High Risk" as const,
+          },
+        ]
+      : []),
+    ...(intakeReviewsRequiringCmmc.length > 0
+      ? [
+          {
+            label: `${intakeReviewsRequiringCmmc.length} intake review(s) require CMMC review`,
+            risk: "High Risk" as const,
+          },
+        ]
+      : []),
+    ...(intakeReviewsRequiringTcp.length > 0
+      ? [
+          {
+            label: `${intakeReviewsRequiringTcp.length} intake review(s) require TCP review`,
+            risk: "Medium Risk" as const,
+          },
+        ]
+      : []),
     ...(overdueProjectComplianceItems.length > 0
       ? [
           {
@@ -859,14 +960,6 @@ export default async function DashboardPage() {
           },
         ]
       : []),
-    ...(highRiskCorrectiveActions.length > 0
-      ? [
-          {
-            label: `${highRiskCorrectiveActions.length} high-risk POA&M / corrective action item(s) remain open`,
-            risk: "High Risk" as const,
-          },
-        ]
-      : []),
     ...(highRiskIncidentReports.length > 0
       ? [
           {
@@ -883,27 +976,11 @@ export default async function DashboardPage() {
           },
         ]
       : []),
-    ...(personnelSecureMachineIncomplete.length > 0
-      ? [
-          {
-            label: `${personnelSecureMachineIncomplete.length} unverified secure machine assignment(s)`,
-            risk: "High Risk" as const,
-          },
-        ]
-      : []),
     ...(personnelTrainingIncomplete.length > 0
       ? [
           {
             label: `${personnelTrainingIncomplete.length} personnel training item(s) incomplete`,
             risk: "High Risk" as const,
-          },
-        ]
-      : []),
-    ...(pendingProjectDocs.length > 0
-      ? [
-          {
-            label: `${pendingProjectDocs.length} evidence/document item(s) not audit-ready`,
-            risk: "Medium Risk" as const,
           },
         ]
       : []),
@@ -918,6 +995,43 @@ export default async function DashboardPage() {
   ].slice(0, 5);
 
   const actionAlerts: ActionAlert[] = [
+    ...(highRiskIntakeReviews.length > 0
+      ? [
+          {
+            label: `${highRiskIntakeReviews.length} high-risk intake review(s) need compliance routing`,
+            action: "Review Intake",
+            href: "/project-intake",
+            tone: "red" as const,
+          },
+        ]
+      : []),
+    ...(draftOrInReviewIntakeReviews.length > 0
+      ? [
+          {
+            label: `${draftOrInReviewIntakeReviews.length} intake review(s) are still draft or in review`,
+            action: "Open Intake",
+            href: "/project-intake",
+            tone: "amber" as const,
+          },
+        ]
+      : []),
+    ...(intakeReviewsRequiringEco.length +
+      intakeReviewsRequiringIso.length +
+      intakeReviewsRequiringFso.length >
+    0
+      ? [
+          {
+            label: `${
+              intakeReviewsRequiringEco.length +
+              intakeReviewsRequiringIso.length +
+              intakeReviewsRequiringFso.length
+            } intake routing item(s) require ECO / ISO / FSO review`,
+            action: "Route Reviews",
+            href: "/project-intake",
+            tone: "red" as const,
+          },
+        ]
+      : []),
     ...(overdueProjectComplianceItems.length > 0
       ? [
           {
@@ -988,16 +1102,6 @@ export default async function DashboardPage() {
           },
         ]
       : []),
-    ...(personnelSecureMachineIncomplete.length > 0
-      ? [
-          {
-            label: `${personnelSecureMachineIncomplete.length} personnel record(s) missing verified secure machine assignment`,
-            action: "Verify Machines",
-            href: "/personnel",
-            tone: "red" as const,
-          },
-        ]
-      : []),
   ].slice(0, 8);
 
   const readinessMessage =
@@ -1011,7 +1115,8 @@ export default async function DashboardPage() {
         <div>
           <h1 className="text-3xl font-bold text-slate-900">Action Center</h1>
           <p className="mt-1 text-slate-600">
-            Immediate view of organizational readiness, project compliance, risks, incidents, personnel, and corrective actions.
+            Immediate view of intake, project compliance, organizational readiness,
+            risks, incidents, personnel, and corrective actions.
           </p>
         </div>
 
@@ -1080,10 +1185,10 @@ export default async function DashboardPage() {
           )}
 
           <Link
-            href="/project-compliance"
+            href="/project-intake"
             className="mt-4 inline-flex text-sm font-medium text-blue-600 hover:text-blue-700"
           >
-            View project compliance →
+            View project intake →
           </Link>
         </div>
 
@@ -1148,7 +1253,7 @@ export default async function DashboardPage() {
           )}
 
           <Link
-            href="/cmmc-compliance/reports"
+            href="/audit-mode"
             className="mt-4 inline-flex text-sm font-medium text-blue-600 hover:text-blue-700"
           >
             View all risks →
@@ -1156,7 +1261,47 @@ export default async function DashboardPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-6">
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-4">
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <h2 className="text-lg font-semibold text-slate-900">Project Intake</h2>
+
+          <div className="mt-4 text-4xl font-bold text-blue-600">
+            {projectIntakeReviews.length}
+          </div>
+
+          <div className="mt-1 text-sm text-slate-500">Total intake reviews</div>
+
+          <div className="mt-4 space-y-2 text-sm">
+            <div className="flex justify-between">
+              <span className="text-slate-500">High Risk</span>
+              <span className="font-semibold text-red-600">
+                {highRiskIntakeReviews.length}
+              </span>
+            </div>
+
+            <div className="flex justify-between">
+              <span className="text-slate-500">Draft / In Review</span>
+              <span className="font-semibold text-amber-600">
+                {draftOrInReviewIntakeReviews.length}
+              </span>
+            </div>
+
+            <div className="flex justify-between">
+              <span className="text-slate-500">Finalized</span>
+              <span className="font-semibold text-green-600">
+                {finalizedIntakeReviews.length}
+              </span>
+            </div>
+          </div>
+
+          <Link
+            href="/project-intake"
+            className="mt-4 inline-flex text-sm font-medium text-blue-600"
+          >
+            Open Intake →
+          </Link>
+        </div>
+
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <h2 className="text-lg font-semibold text-slate-900">Projects</h2>
           <div className="mt-4 text-4xl font-bold text-slate-900">{activeProjects.length}</div>
@@ -1349,6 +1494,20 @@ export default async function DashboardPage() {
 
         <div className="grid grid-cols-1 gap-4 text-sm md:grid-cols-2 xl:grid-cols-3">
           <div className="rounded-xl border border-slate-200 p-4">
+            <div className="text-slate-500">Project Intake</div>
+            <div className="mt-1 font-semibold text-slate-900">
+              {finalizedIntakeReviews.length} finalized / {projectIntakeReviews.length} total
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-slate-200 p-4">
+            <div className="text-slate-500">High-Risk Intake Reviews</div>
+            <div className="mt-1 font-semibold text-slate-900">
+              {highRiskIntakeReviews.length} high-risk review(s)
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-slate-200 p-4">
             <div className="text-slate-500">Projects</div>
             <div className="mt-1 font-semibold text-slate-900">
               {activeProjects.length} active / {projects.length} total
@@ -1415,17 +1574,25 @@ export default async function DashboardPage() {
 
       {(draftIncidentReports.length > 0 ||
         openCorrectiveActions.length > 0 ||
-        openProjectComplianceItems.length > 0) && (
+        openProjectComplianceItems.length > 0 ||
+        draftOrInReviewIntakeReviews.length > 0) && (
         <div className="rounded-2xl border border-yellow-200 bg-yellow-50 p-6 text-sm text-yellow-900">
-          {draftIncidentReports.length > 0 && (
+          {draftOrInReviewIntakeReviews.length > 0 && (
             <div>
+              You currently have {draftOrInReviewIntakeReviews.length} project intake review
+              {draftOrInReviewIntakeReviews.length === 1 ? "" : "s"} still in draft or review status.
+            </div>
+          )}
+
+          {draftIncidentReports.length > 0 && (
+            <div className="mt-2">
               You currently have {draftIncidentReports.length} draft incident report
               {draftIncidentReports.length === 1 ? "" : "s"} that may need review or completion.
             </div>
           )}
 
           {openCorrectiveActions.length > 0 && (
-            <div className={draftIncidentReports.length > 0 ? "mt-2" : ""}>
+            <div className="mt-2">
               You currently have {openCorrectiveActions.length} open POA&amp;M / corrective action
               item{openCorrectiveActions.length === 1 ? "" : "s"} requiring tracking.
             </div>
